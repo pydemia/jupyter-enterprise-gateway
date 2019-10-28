@@ -28,3 +28,18 @@ jupyter notebook \
   --NotebookApp.kernel_manager_class=nb2kg.managers.RemoteKernelManager \
   --NotebookApp.kernel_spec_manager_class=nb2kg.managers.RemoteKernelSpecManager
 ```
+
+
+```sh
+jupyter notebook \
+ --gateway-url=http://<ENTERPRISE_GATEWAY_HOST_IP>:8888
+ --GatewayClient.http_user=guest
+ --GatewayClient.http_pwd=guest-password
+
+jupyter notebook \
+ --ip=0.0.0.0 \
+ --port=8888 \
+ --gateway-url=http://0.0.0.0:8888 \
+ --GatewayClient.http_user=test \
+ --GatewayClient.http_pwd=test 
+```
