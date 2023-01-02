@@ -54,13 +54,53 @@ docker run -t --rm \
 
 ### Prepare an Enterprise Gateway Server
 
-* Single(recommended: with Anaconda)
+See: https://jupyter-enterprise-gateway.readthedocs.io/en/latest/operators/index.html
+
+#### Single(recommended: with Anaconda)
+
+See: 
+https://jupyter-enterprise-gateway.readthedocs.io/en/latest/operators/deploy-single.html
+https://jupyter-enterprise-gateway.readthedocs.io/en/latest/operators/launching-eg.html
 
 ```bash
 pip install --upgrade jupyter_enterprise_gateway
+
+jupyter enterprisegateway --ip=0.0.0.0 --port_retries=0
 ```
 
-* Docker-Compose
+Example: Kernelspec
+
+```json
+{
+  "display_name": "Python 3 Local",
+  "language": "python",
+  "metadata": {
+    "process_proxy": {
+      "class_name": "enterprise_gateway.services.processproxies.processproxy.LocalProcessProxy"
+    }
+  },
+  "argv": ["python", "-m", "ipykernel_launcher", "-f", "{connection_file}"]
+}
+```
+
+
+* Example: `launch.sh`
+
+```bash
+#!/bin/bash
+
+LOG=/var/log/enterprise_gateway.log
+PIDFILE=/var/run/enterprise_gateway.pid
+
+jupyter enterprisegateway --ip=0.0.0.0 --port_retries=0 --log-level=DEBUG --RemoteKernelManager.cull_idle_timeout=43200 --MappingKernelManager.cull_interval=60 > $LOG 2>&1 &
+if [ "$?" -eq 0 ]; then
+  echo $! > $PIDFILE
+else
+  exit 1
+fi
+```
+
+#### Docker Compose
 
 ```bash
 git clone https://github.com/jupyter-server/enterprise_gateway
@@ -69,7 +109,7 @@ cd enterprise_gateway/etc/docker
 docker-compose up
 ```
 
-* Docker Swarm
+#### Docker Swarm
 
 ```bash
 git clone https://github.com/jupyter-server/enterprise_gateway
@@ -78,9 +118,17 @@ cd enterprise_gateway/etc/docker
 docker stack deploy -c docker-compose.yml enterprise-gateway
 ```
 
-* Kubernetes
+#### Kubernetes
 
-* Spark on Hadoop
+See: https://jupyter-enterprise-gateway.readthedocs.io/en/latest/operators/deploy-kubernetes.html
+
+#### Python-Distributed
+
+Supported Load Balancing Algorithms: `round-robin` or `least-connection`
+
+See: https://jupyter-enterprise-gateway.readthedocs.io/en/latest/operators/deploy-distributed.html
+
+#### Spark on Hadoop
 
 
 #### Set a configuration on the client side
