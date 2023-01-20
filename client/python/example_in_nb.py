@@ -127,7 +127,6 @@ class GatewayClient(object):
     def start_kernel(self, kernelspec_name, username=DEFAULT_USERNAME, timeout=REQUEST_TIMEOUT):
         self.log.info('Starting a {} kernel ....'.format(kernelspec_name))
 
-
         json_data = {'name': kernelspec_name,
                      'env': {'KERNEL_USERNAME': username,
                              'KERNEL_LAUNCH_TIMEOUT': GatewayClient.KERNEL_LAUNCH_TIMEOUT}}

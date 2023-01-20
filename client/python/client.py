@@ -1,4 +1,4 @@
-from typing import Dict, Union
+from typing import Dict, Union, Optional, List
 
 import os
 import logging
@@ -11,6 +11,70 @@ import websocket
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 120))
 log_level = os.getenv("LOG_LEVEL", "INFO")
 
+import queue
+import uuid
+import httpx
+from pathlib import PosixPath, Path
+from . import async_client, blocking_client
+
+DEFAULT_UUID = "f1e163d1-463c-414b-b4d4-3e51fe427e5f"
+
+async def get_xsrf_cookie(url):
+    response = await async_client.get(f"{url}/login")
+    return response.cookies["_xsrf"]
+
+async def get_login(xsrf_cookie_val, password, url):
+    pw_body = {
+        "_xsrf": xsrf_cookie_val,
+        "password": password,
+    }
+    response = await async_client.post(
+        f"{url}/login",
+        data=pw_body,
+    )
+    response = await async_client.post(
+        f"{url}/login?next=%2F",
+        data=pw_body,
+        cookies={"_xsrf": xsrf_cookie_val},
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+    return response
+
+
+async def get_token_callback(r, cookies: httpx.Cookies):
+    if isinstance(r, requests.Response):
+        parsed = urlparse(r.url)
+        params = parse_qs(parsed.query)
+    elif isinstance(r, httpx.Response):
+        parsed = urlparse(r.headers["location"])
+        params: Dict = parse_qs(parsed.query)
+    else:
+        return httpx.Response(status_code=422)
+
+    if "code" in params:
+        r.hook_called = True  # for `requests` only.
+        params: httpx.QueryParams = httpx.QueryParams(params).merge(r.url.params)
+        callback_url: str = params.get("callback")
+        resp = await async_client.get(
+            f"{callback_url}/getToken", params=params, cookies=cookies,
+        )
+        return resp
+    else:
+        return httpx.Response(status_code=401)
+
+
+async def auth_code(user_id: str, cookies: Union[httpx.Cookies, Dict], sso_url: str):
+    # sso_url = SSO_URL
+    params = {
+        "clientId": user_id,
+        "callback": sso_url
+    }
+    response = await async_client.get(
+        f"{sso_url}/authCode", params=params, cookies=cookies)
+    resp = await get_token_callback(response, cookies=cookies)
+    return resp
+
+
 
 class GatewayClient(object):
     """
@@ -21,8 +85,9 @@ class GatewayClient(object):
     connections.
     """
     DEFAULT_USERNAME = os.getenv('KERNEL_USERNAME', 'pydemia')
-    DEFAULT_GATEWAY_HOST = BASE_GATEWAY_URL = os.getenv('GATEWAY_HOST', 'localhost:8989')
+    DEFAULT_GATEWAY_HOST = BASE_GATEWAY_URL = os.getenv('GATEWAY_HOST', 'localhost:8888')
     KERNEL_LAUNCH_TIMEOUT = os.getenv('KERNEL_LAUNCH_TIMEOUT', '40')
+    DEFAULT_KERNEL_NAME = os.getenv("DEFAULT_KERNEL_NAME", "python3")
     
     BASE_GATEWAY_HTTP_URL = f"http://{BASE_GATEWAY_URL}"
     BASE_GATEWAY_WS_URL = f"ws://{BASE_GATEWAY_URL}"
@@ -34,14 +99,66 @@ class GatewayClient(object):
         self.log.setLevel(log_level)
         if password:
             self.session = requests.Session()
+            self.http_client = httpx.Client()
             LOGIN_URL = f"{self.BASE_GATEWAY_HTTP_URL}/login"
-            r = self.session.get(LOGIN_URL)
+            r = self.http_client.get(LOGIN_URL)
             self.xsrf_cookie = r.cookies["_xsrf"]
+            xsrf_params = {
+                "_xsrf": self.xsrf_cookie
+            }
+            p = {
+                "password": password,
+            }
             params = {
                 "_xsrf": self.xsrf_cookie,
                 "password": password,
             }
-            self.session.post(LOGIN_URL, data=params)
+            s = self.http_client.post(LOGIN_URL, data=params)
+            req_cookies: httpx.Cookies = dict(r.cookies, **s.cookies)
+            redirected_headers = {
+                "Host": self.BASE_GATEWAY_URL,
+                "Origin": self.BASE_GATEWAY_HTTP_URL,
+            }
+            ss = self.http_client.post(
+                f"{LOGIN_URL}?next=%2F",
+                # cookies=xsrf_params,
+                cookies=req_cookies,
+                headers=dict(
+                    redirected_headers,
+                    **{
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Referer": LOGIN_URL,
+                    }
+                ),
+                data=params,
+            )
+            # sss = self.session.post(
+            #     f"{LOGIN_URL}?next=%2Flab%3F",
+            #     # cookies=xsrf_params,
+            #     cookies=req_cookies,
+            #     headers=redirected_headers,
+            #     data=params,
+            # )
+            resp = self.http_client.get(
+                self.http_api_endpoint,
+                params=params,
+                cookies=ss.cookies,
+                headers=ss.headers,
+            )
+            kernels_opened: List[Dict] = resp.json()
+            if resp.status_code == 200:
+                self.request_cookies = req_cookies
+                self.request_headers = dict(
+                    redirected_headers,
+                    **{"X-XSRFToken": self.xsrf_cookie},
+                )
+
+            self.kernelspecs = self.get_kernelspecs()
+            if self.kernelspecs:
+                self.DEFAULT_KERNEL_NAME = self.kernelspecs["default"]
+
+            # kernel_info: Dict = kernels_opened[0]
+            # kernel_id: str = kernel_info["id"]
         else:
             self.session = requests
 
@@ -64,26 +181,188 @@ class GatewayClient(object):
             json_data.update({"_xsrf": self.xsrf_cookie})
         return json_data
 
-    def start_kernel(self, kernelspec_name, username=DEFAULT_USERNAME, timeout=REQUEST_TIMEOUT):
+    def _get_xsrf_headers(self, headers: Dict = {}) -> Dict:
+        if self.xsrf_cookie:
+            headers.update({"X-XSRFToken": self.xsrf_cookie})
+        return headers
+
+    def _get_xsrf_params(self, params: Dict = {}) -> Dict:
+        if self.xsrf_cookie:
+            params.update({"_xsrf": self.xsrf_cookie})
+        return params
+
+    def get_kernelspecs(self) -> List[Dict]:
+        resp = self.session.get(
+            f"{self.BASE_GATEWAY_HTTP_URL}/api/kernelspecs",
+            data={
+                "_xsrf": self.xsrf_cookie,
+                # "password": "zxc",
+            },
+            cookies=self.request_cookies,
+            headers=self.request_headers,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            raise httpx.RequestError
+
+    def start_kernel(self, kernelspec_name="python3", username=DEFAULT_USERNAME, timeout=REQUEST_TIMEOUT):
         self.log.info('Starting a {} kernel ....'.format(kernelspec_name))
 
+        if kernelspec_name in self.kernelspecs["kernelspecs"]:
+            system_default = self.kernelspecs["default"]
+            print("The given name '{kernelspec_name}' does not exist. use '{system_default}' instead...")
+            kernelspec_name = system_default
 
-        json_data = {'name': kernelspec_name,
-                     'env': {'KERNEL_USERNAME': username,
-                             'KERNEL_LAUNCH_TIMEOUT': GatewayClient.KERNEL_LAUNCH_TIMEOUT}}
-        
-        json_data = self._add_xsrf_cookie(json_data)
+        json_data = {
+            'name': kernelspec_name,
+            # 'env': {
+            #     'KERNEL_USERNAME': username,
+            #     'KERNEL_LAUNCH_TIMEOUT': self.KERNEL_LAUNCH_TIMEOUT,
+            # }
+        }
 
-        response = self.session.post(self.http_api_endpoint, data=json_encode(json_data))
-        if response.status_code == 201:
-            json_data = response.json()
-            kernel_id = json_data.get("id")
-            self.log.info('Started kernel with id {}'.format(kernel_id))
+        # json_data = self._add_xsrf_cookie(json_data)
+
+        # json_data.update({"_xsrf": self.xsrf_cookie})
+        kernel_info: Dict = {"name": kernelspec_name}
+        available_sessions: List[Dict] = self.http_client.get(
+            f"{self.BASE_GATEWAY_HTTP_URL}/api/sessions",
+            cookies=self.request_cookies,
+            headers=self.request_headers,
+            # data=json_encode(json_data)
+            # data={
+            #     "id": None,
+            #     "kernel": kernel_info,
+            #     # "name": f"{self.DEFAULT_USERNAME}-2413",
+            #     # "path": DEFAULT_UUID,
+            #     "type": "notebook",
+            # }
+            # data=json_encode(self._add_xsrf_cookie(json_data))
+        )
+
+        # See: https://jupyter-notebook.readthedocs.io/en/stable/extending/contents.html#filesystem-entities
+        # created_directory = self.http_client.post(
+        #     f"{self.BASE_GATEWAY_HTTP_URL}/api/contents",
+        #     cookies=self.request_cookies,
+        #     headers=self.request_headers,
+        #     data=json_encode({
+        #         "type": "directory",  # "notebook", "file"
+        #         "path": "",
+        #         # "path": "/work/test",  # ""
+        #     })
+        # )
+        # old_path = created_directory.headers.get("location").replace("/api/contents/", "", 1)
+        # new_path = DEFAULT_UUID
+        # renamed_directory = self.http_client.patch(
+        #     f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{old_path}",
+        #     cookies=self.request_cookies,
+        #     headers=self.request_headers,
+        #     data=json_encode({
+        #         "path": new_path,
+        #     })
+        # )
+        # if renamed_directory.status_code == 200:
+        #     print("OK")
+        # elif renamed_directory.status_code == 409:
+        #     print("Conflict")
+        # deleted_directory = self.http_client.delete(
+        #     f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{new_path}",
+        #     cookies=self.request_cookies,
+        #     headers=self.request_headers,
+        # )
+        # if deleted_directory.status_code == 204:
+        #     print("OK", "No Content")
+
+        file_path = DEFAULT_UUID
+        existing_file = self.http_client.get(
+            f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{file_path}",
+            cookies=self.request_cookies,
+            headers=self.request_headers,
+        )
+
+        if existing_file.status_code == 200:
+            pass
+        elif existing_file.status_code == 404:
+
+            created_file = self.http_client.post(
+                f"{self.BASE_GATEWAY_HTTP_URL}/api/contents",
+                cookies=self.request_cookies,
+                headers=self.request_headers,
+                params=json_encode({
+                    "type": "file",  # "notebook",
+                    "path": "",
+                    # "path": "/work/test",  # ""
+                })
+            )
+            old_path = created_file.headers.get("location").replace("/api/contents/", "", 1)
+            new_path = DEFAULT_UUID
+            renamed_file = self.http_client.patch(
+                f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{old_path}",
+                cookies=self.request_cookies,
+                headers=self.request_headers,
+                data=json_encode({
+                    "path": new_path,
+                })
+            )
+            if renamed_file.status_code == 200:
+                print("OK")
+            elif renamed_file.status_code == 409:
+                print("Conflict")
+        # deleted_file = self.http_client.delete(
+        #     f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{new_path}",
+        #     cookies=self.request_cookies,
+        #     headers=self.request_headers,
+        # )
+        # if deleted_file.status_code == 204:
+        #     print("OK", "No Content")
+
+        created_or_existing_session = self.http_client.post(
+            f"{self.BASE_GATEWAY_HTTP_URL}/api/sessions",
+            cookies=self.request_cookies,
+            headers=self.request_headers,
+            data=json_encode({
+                "kernel": kernel_info,
+                "name": f"{self.DEFAULT_USERNAME}-{file_path}",
+                "type": "file",
+                "path": file_path
+            }),
+            # data=json_encode(json_data)
+            # data={
+            #     "id": None,
+            #     "kernel": kernel_info,
+            #     "name": f"{self.DEFAULT_USERNAME}-2413",
+            #     "path": DEFAULT_UUID,
+            #     "type": "notebook",
+            # }
+            # data=json_encode(self._add_xsrf_cookie(json_data))
+        )
+        if created_or_existing_session.status_code == 201:
+            json_data = created_or_existing_session.json()
+            session_id = json_data.get("id")  # kernel_id in enterprise-gateway
+            kernel_id = json_data.get("kernel").get("id")
+            self.log.info(f'Started kernel with session id {session_id}')
         else:
-            raise RuntimeError('Error starting kernel : {} response code \n {}'.
-                               format(response.status_code, response.content))
+            raise RuntimeError(
+                'Error starting kernel : {} response code \n {}'.format(
+                    created_or_existing_session.status_code,
+                    created_or_existing_session.content
+                )
+            )
 
-        return KernelClient(self.http_api_endpoint, self.ws_api_endpoint, kernel_id, timeout=timeout, logger=self.log)
+        return KernelSessionClient(
+            self.http_api_endpoint,
+            self.ws_api_endpoint,
+            kernel_id,
+            session_id,
+            timeout=timeout,
+            logger=self.log,
+            cookies=self.request_cookies,
+            headers=self.request_headers,
+            session_info=created_or_existing_session.json(),
+            # session_id=created_or_existing_session.get("id")
+            # headers=self.request_headers,
+        )
 
     def shutdown_kernel(self, kernel):
         self.log.info("Shutting down kernel : {} ....".format(kernel.kernel_id))
@@ -94,7 +373,10 @@ class GatewayClient(object):
         kernel.shutdown()
 
         url = "{}/{}".format(self.http_api_endpoint, kernel.kernel_id)
-        response = self.session.delete(url)
+        response = self.session.delete(
+            url,
+            params=self._get_xsrf_params(),
+        )
         if response.status_code == 204:
             self.log.debug('Kernel {} shutdown'.format(kernel.kernel_id))
             self.session.close()
@@ -103,13 +385,23 @@ class GatewayClient(object):
             raise RuntimeError('Error shutting down kernel {}: {}'.format(kernel.kernel_id, response.content))
 
 
-class KernelClient(object):
+class KernelSessionClient(object):
 
     DEAD_MSG_ID = 'deadbeefdeadbeefdeadbeefdeadbeef'
     POST_IDLE_TIMEOUT = 0.5
     DEFAULT_INTERRUPT_WAIT = 1
 
-    def __init__(self, http_api_endpoint, ws_api_endpoint, kernel_id, timeout=REQUEST_TIMEOUT, logger=None):
+    def __init__(
+            self,
+            http_api_endpoint,
+            ws_api_endpoint,
+            kernel_id: str,
+            session_id: str,
+            timeout=REQUEST_TIMEOUT,
+            logger=None,
+            cookies=None,
+            headers=None,
+            session_info: Dict = None):
         self.shutting_down = False
         self.restarting = False
         self.http_api_endpoint = http_api_endpoint
@@ -117,11 +409,30 @@ class KernelClient(object):
         self.ws_api_endpoint = ws_api_endpoint
         self.kernel_ws_api_endpoint = '{}/{}/channels'.format(ws_api_endpoint, kernel_id)
         self.kernel_id = kernel_id
+        self.session_id = session_id
+        self.session_info = session_info
+        self.cookies = cookies
+        self.headers = headers
         self.log = logger
         self.log.debug('Initializing kernel client ({}) to {}'.format(kernel_id, self.kernel_ws_api_endpoint))
 
-        self.kernel_socket = \
-            websocket.create_connection(self.kernel_ws_api_endpoint, timeout=timeout, enable_multithread=True)
+        try:
+            params_dict = {"session_id": self.session_id}
+            params_str = "&".join([
+                f"{k}={v}" for k, v in params_dict.items()
+            ])
+            headers.update({"Sec-WebSocket-Key": "vSIvyDm4+qW272YTdauU5w=="})
+            self.kernel_socket = websocket.create_connection(
+                f"{self.kernel_ws_api_endpoint}?{params_str}",
+                timeout=timeout,
+                enable_multithread=True,
+                cookies=cookies,
+                headers=headers,
+                origin="http://localhost:8888",
+                # params={"session_id": self.session_id}
+            )
+        except websocket.WebSocketBadStatusException as e:
+            pass
 
         self.response_queues = {}
 

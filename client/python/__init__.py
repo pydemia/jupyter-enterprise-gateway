@@ -1,1 +1,1 @@
-from . import async_client, client
+from . import async_client, blocking_client, client
