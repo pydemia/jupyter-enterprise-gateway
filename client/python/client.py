@@ -385,6 +385,15 @@ class GatewayClient(object):
             raise RuntimeError('Error shutting down kernel {}: {}'.format(kernel.kernel_id, response.content))
 
 
+import websockets
+from websockets.uri import WebSocketURI
+from websockets.extensions import ClientExtensionFactory
+from websockets.client import ClientConnection
+from websockets import connect
+from websockets.utils import generate_key
+
+from jupyter_client import BlockingKernelClient, AsyncKernelClient
+
 class KernelSessionClient(object):
 
     DEAD_MSG_ID = 'deadbeefdeadbeefdeadbeefdeadbeef'
@@ -421,9 +430,116 @@ class KernelSessionClient(object):
             params_str = "&".join([
                 f"{k}={v}" for k, v in params_dict.items()
             ])
-            headers.update({"Sec-WebSocket-Key": "vSIvyDm4+qW272YTdauU5w=="})
+            # headers.update({"Sec-WebSocket-Key": "vSIvyDm4+qW272YTdauU5w=="})
+
+            # extensions = [
+            #     "permessage-deflate",
+            #     "client_max_window_bits",
+            # ]
+            # extensions_factory = [ClientExtensionFactory() for n in extensions]
+            # extensions_factory = [
+            #     setattr(e, "name", n)
+            #     for e, n in zip(extensions_factory, extensions)
+            # ]
+
+            # self.websocket_client = ClientConnection(
+            #     ws_uri,
+            #     origin="http://localhost:8888",
+            #     # extensions=extensions_factory,
+            # )
+            # websocket_request = self.websocket_client.connect()
+            # self.websocket_client.send_request(websocket_request)
+            # sent_data = self.websocket_client.data_to_send()
+            # self.websocket_client = websockets.connect(
+            #     f"{self.kernel_ws_api_endpoint}?{params_str}",
+            #     origin="http://localhost:8888",
+            #     extra_headers=headers,
+            # )
+            # aa = self.websocket_client
+            # msg = self.websocket_client.send("print('test')")
+
+            # import zmq
+            # import zmq.ssh
+            # context = zmq.Context()
+            # socket = context.socket(zmq.REQ)
+            # zmq.ssh.tunnel_connection(socket, "tcp://locahost:18888", "jovyan@localhost")
+            # socket.send(b"Hello")
+            # reply = socket.recv()
+
+            blocking_client.get(
+                f"http://localhost:8888/api/sessions/{session_id}",
+                headers=headers,
+                cookies=cookies,
+            )
+            headers.update(
+                {
+                    "Sec-WebSocket-Key": generate_key(),
+                    "Upgrade": "websocket",
+                    "Connection": "upgrade",
+                    "Sec-WebSocket-Version": "13",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                    "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
+                }
+            )
+            # 426 Upgrade Required -> 101 Switching Protocols
+
+            upgraded_to_websocket = blocking_client.get(
+                f"http://localhost:8888/api/kernels/{kernel_id}/channels?session_id={session_id}",
+                headers=headers,
+                cookies=cookies,
+            )
+            
+            # from tornado.ioloop import IOLoop, PeriodicCallback
+            # from tornado import gen
+            # from tornado.websocket import websocket_connect
+
+            
+            # class WebSocketClient(object):
+            #     def __init__(self, url, timeout):
+            #         self.url = url
+            #         self.timeout = timeout
+            #         self.ioloop = IOLoop.instance()
+            #         self.ws = None
+            #         self.connect()
+            #         PeriodicCallback(self.keep_alive, 20000).start()
+            #         self.ioloop.start()
+
+            #     @gen.coroutine
+            #     def connect(self):
+            #         print("trying to connect")
+            #         try:
+            #             self.ws = yield websocket_connect(self.url)
+            #         except Exception as e:
+            #             print("connection error")
+            #         else:
+            #             print("connected")
+            #             self.run()
+
+            #     @gen.coroutine
+            #     def run(self):
+            #         while True:
+            #             msg = yield self.ws.read_message()
+            #             if msg is None:
+            #                 print("connection closed")
+            #                 self.ws = None
+            #                 break
+
+            #     def keep_alive(self):
+            #         if self.ws is None:
+            #             self.connect()
+            #         else:
+            #             self.ws.write_message("keep alive")
+
+            # ws_client = WebSocketClient(
+            #     f"{self.kernel_ws_api_endpoint}?{params_str}",
+            #     timeout=5,
+            # )
+
+
             self.kernel_socket = websocket.create_connection(
-                f"{self.kernel_ws_api_endpoint}?{params_str}",
+                f"ws://localhost:8888/api/kernels/{kernel_id}/channels?session_id={session_id}",
+                # f"{self.kernel_ws_api_endpoint}?{params_str}",
                 timeout=timeout,
                 enable_multithread=True,
                 cookies=cookies,
@@ -431,6 +547,7 @@ class KernelSessionClient(object):
                 origin="http://localhost:8888",
                 # params={"session_id": self.session_id}
             )
+            print("hang")
         except websocket.WebSocketBadStatusException as e:
             pass
 

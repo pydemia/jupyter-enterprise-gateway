@@ -3,3 +3,5 @@
 jupyter_server
 jupyter_enterprise_gateway
 httpx
+websockets
+zmq
