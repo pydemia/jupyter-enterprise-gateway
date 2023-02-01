@@ -5,3 +5,4 @@ jupyter_enterprise_gateway
 httpx
 websockets
 zmq
+autologging

@@ -1,4 +1,7 @@
-from ..python.client import GatewayClient, KernelSessionClient
+from ..python.client import GatewayClient, KernelClient, decode_cellmsg
+import logging
+
+logging.basicConfig(level="INFO")
 
 def test_custom_client():
     
@@ -15,14 +18,15 @@ def test_custom_client():
     gw_client = GatewayClient(host=BASE_GATEWAY_URL, password="zxc")
     gw_client.DEFAULT_USERNAME = DEFAULT_USERNAME
 
-    kernel_client: KernelSessionClient = gw_client.start_kernel(
-        kernelspec_name=DEFAULT_KERNELSPEC_NAME,
-        username=DEFAULT_USERNAME,
-        timeout=REQUEST_TIMEOUT,
-    )
+    kernel_client: KernelClient = gw_client.get_client()
 
-    
-    code = """
+    # kernel_client: KernelSessionClient = gw_client.start_kernel(
+    #     kernelspec_name=DEFAULT_KERNELSPEC_NAME,
+    #     username=DEFAULT_USERNAME,
+    #     timeout=REQUEST_TIMEOUT,
+    # )
+
+    code0 = """
 import numpy as np
 import logging
 import time
@@ -33,10 +37,37 @@ print(np.__version__)
 
 time.sleep(10)
 
-log.info('log test')"""
+log.info('log test')
+a = 5
+"""
+    code1 = """
+a / 2
+"""
+    code2 = """
+a / 0
+"""
 
+    code3 = """
+b = a
+b
+"""
+
+
+    result0 = kernel_client.execute(code0)
+    result1 = kernel_client.execute(code1)
+    result2 = kernel_client.execute(code2)
+    result3 = kernel_client.execute(code3)
+
+    msg0 = decode_cellmsg(result0)
+    msg1 = decode_cellmsg(result1)
+    msg2 = decode_cellmsg(result2)
+    msg3 = decode_cellmsg(result3)
+
+    print(msg0)
+    print(msg1)
+    print(msg2)
+    print(msg3)
     kernel_client.restart()
-    result = kernel_client.execute(code)
     # async def execute(code: str, kernel_client: KernelClient):
     #     return kernel_client.execute(code)
 
