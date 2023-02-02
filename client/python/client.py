@@ -1,5 +1,6 @@
 from typing import Dict, Union, Optional, List, Tuple
 
+import datetime as dt
 from autologging import logged
 import os
 import logging
@@ -12,13 +13,16 @@ import websocket
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 120))
 log_level = os.getenv("LOG_LEVEL", "INFO")
 
+
 import queue
 import uuid
 import httpx
-from pathlib import PosixPath, Path
+from httpx import URL, InvalidURL
+from pathlib import PosixPath, Path, PurePath
 
 
 from . import async_client, blocking_client
+from .utils import joinpaths, build_url
 
 DEFAULT_UUID = "f1e163d1-463c-414b-b4d4-3e51fe427e5f"
 
@@ -40,6 +44,15 @@ def decode_cellmsg(res: str):
     return interruptable_msg
 
 
+
+URLPATH_LOGIN = "/login"
+URLPATH_KERNELSPECS = "/api/kernelspecs"
+URLPATH_KERNELS = "/api/kernels"
+URLPATH_SESSIONS = "/api/sessions"
+URLPATH_CONTENTS = "/api/contents"
+URLPATH_ME = "/api/me"
+
+
 @logged
 class KernelClient(object):
 
@@ -49,32 +62,43 @@ class KernelClient(object):
 
     def __init__(
             self,
-            http_api_endpoint,
-            ws_api_endpoint,
+            http_api_endpoint: Union[str, URL],
+            ws_api_endpoint: Union[str, URL],
             kernel_id: str,
             session_id: str,
             timeout=REQUEST_TIMEOUT,
             logger=None,
-            cookies: Dict = None,
+            cookies: Union[httpx.Cookies, Dict] = None,
             headers: Union[httpx.Headers, Dict] = None,
             params: str = None,
             # session_info: Dict = None
             ):
         self.shutting_down = False
         self.restarting = False
-        self.http_api_endpoint = http_api_endpoint
-        self.kernel_http_api_endpoint = '{}/{}'.format(http_api_endpoint, kernel_id)
-        self.ws_api_endpoint = ws_api_endpoint
-        self.kernel_ws_api_endpoint = '{}/{}/channels'.format(ws_api_endpoint, kernel_id)
+        self.http_url = http_api_endpoint
+        # self.kernel_http_api_endpoint = '{}/{}'.format(http_api_endpoint, kernel_id)
+        self.ws_url = ws_api_endpoint
+        # self.kernel_ws_api_endpoint = '{}/{}/channels'.format(ws_api_endpoint, kernel_id)
         self.kernel_id = kernel_id
         self.session_id = session_id
-        self.cookies = cookies
-        self.headers = headers
+        # self.cookies = httpx.Cookies(cookies)
+        # self.headers = httpx.Headers(headers)
+        self.cookies = httpx.Cookies(cookies)
+        self.headers = httpx.Headers(headers)
         self.params = params
         self.timeout = timeout
         self.log = logging.getLogger('GatewayClient')
         self.log.setLevel(log_level)
-        self.log.debug('Initializing kernel client ({}) to {}'.format(kernel_id, self.kernel_ws_api_endpoint))
+        # self.log.debug('Initializing kernel client ({}) to {}'.format(kernel_id, self.kernel_ws_api_endpoint))
+
+        self.http_url_login = build_url(self.http_url, URLPATH_LOGIN)
+        self.http_url_kernelspecs = build_url(self.http_url, URLPATH_KERNELSPECS)
+        self.http_url_kernels = build_url(self.http_url, URLPATH_KERNELS)
+        self.http_url_sessions = build_url(self.http_url, URLPATH_SESSIONS)
+        self.ws_url_kernels = build_url(self.ws_url, URLPATH_KERNELS, kernel_id, "channels", params={"session_id": session_id})
+        self.ws_url_sessions = build_url(self.ws_url, URLPATH_SESSIONS)
+        self.http_url_contents = build_url(self.http_url, URLPATH_CONTENTS)
+
 
         params_dict = {"session_id": self.session_id}
         params_str = "&".join([
@@ -83,9 +107,10 @@ class KernelClient(object):
 
         self.http_client = httpx.Client()
         checked_session = self.http_client.get(
-            f"http://localhost:8888/api/sessions/{session_id}",
-            headers=headers,
-            cookies=cookies,
+            build_url(self.http_url_sessions, session_id),
+            # f"http://localhost:8888/api/sessions/{session_id}",
+            cookies=self.cookies,
+            headers=self.headers,
         )
         # Session_Info Dict
         # id: uuid_str (session_id)
@@ -116,16 +141,11 @@ class KernelClient(object):
                 "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
             }
         )
-        check_me = self.http_client.get(
-            "http://localhost:8888/api/me",
-            headers=headers,
-            # cookies=cookies,
-        )
         available_kernels = self.http_client.get(
-            self.http_api_endpoint,
-            params=params,
+            self.http_url_kernels,
             cookies=cookies,
             headers=headers,
+            params=params,
         )
         available_kernels = available_kernels.json()
 
@@ -136,7 +156,9 @@ class KernelClient(object):
 
         try:
             self.kernel_socket = websocket.create_connection(
-                f"ws://localhost:8888/api/kernels/{kernel_id}/channels?session_id={session_id}",
+                # build_url(self.ws_url_kernels, kernel_id, "channels", params={"session_id": session_id}),
+                str(self.ws_url_kernels),
+                # f"ws://localhost:8888/api/kernels/{kernel_id}/channels?session_id={session_id}",
                 timeout=self.timeout,  # timeout,
                 enable_multithread=True,
                 header=self.websocket_extra_headers,
@@ -172,10 +194,11 @@ class KernelClient(object):
                 self.log.warning("Response reader thread is not terminated, continuing...")
             self.response_reader = None
 
-    def execute(self, code, timeout=REQUEST_TIMEOUT):
+    def execute(self, code, timeout=REQUEST_TIMEOUT):# -> Tuple[str, datetime]:
         """
         Executes the code provided and returns the result of that execution.
         """
+        start_dt = dt.datetime.now()
         response = []
         try:
             msg_id = self._send_request(code)
@@ -219,7 +242,11 @@ class KernelClient(object):
         except BaseException as b:
             self.log.debug(b)
 
-        return ''.join(response)
+        
+        end_dt = dt.datetime.now()
+        elapsed_dt = end_dt - start_dt
+        self.log.debug(f"ELAPSED TIME: {elapsed_dt}")
+        return ''.join(response), elapsed_dt
 
     def interrupt(self):
         url = "{}/{}".format(self.kernel_http_api_endpoint, "interrupt")
@@ -417,22 +444,45 @@ class GatewayClient(object):
     connections.
     """
     DEFAULT_USERNAME = os.getenv('KERNEL_USERNAME', 'pydemia')
-    DEFAULT_GATEWAY_HOST = BASE_GATEWAY_URL = os.getenv('GATEWAY_HOST', 'localhost:8888')
+    DEFAULT_GATEWAY_HOST = BASE_GATEWAY_URL = os.getenv('GATEWAY_HOST', 'http://localhost:8888')
     KERNEL_LAUNCH_TIMEOUT = os.getenv('KERNEL_LAUNCH_TIMEOUT', '60')
     DEFAULT_KERNEL_NAME = os.getenv("DEFAULT_KERNEL_NAME", "python3")
     
-    BASE_GATEWAY_HTTP_URL = f"http://{BASE_GATEWAY_URL}"
-    BASE_GATEWAY_WS_URL = f"ws://{BASE_GATEWAY_URL}"
+    # BASE_GATEWAY_HTTP_URL = f"http://{BASE_GATEWAY_URL}"
+    # BASE_GATEWAY_WS_URL = f"ws://{BASE_GATEWAY_URL}"
 
     def __init__(self, host=DEFAULT_GATEWAY_HOST, password=None):
-        self.http_api_endpoint = 'http://{}/api/kernels'.format(host)
-        self.ws_api_endpoint = 'ws://{}/api/kernels'.format(host)
+        
+        self._set_urls(host=host)
+
         self.log = logging.getLogger('GatewayClient')
+
         self.log.setLevel(log_level)
         self.http_client = httpx.Client()
         self.password = password
 
         self._get_login()
+
+    def _set_urls(self, host=DEFAULT_GATEWAY_HOST) -> None:
+        self.http_url: URL = URL(host)
+        http_scheme = self.http_url.scheme
+        if http_scheme not in ["http", "https"]:
+            raise InvalidURL(message="Scheme must be given: [http, https]") from None
+        
+        self.url_subpath = self.http_url.path
+        self.url_domain = self.http_url.netloc.decode()
+        self.origin = self.url_domain
+        if http_scheme.endswith("s"):
+            self.ws_url = URL(self.http_url, scheme="wss")
+        else:
+            self.ws_url = URL(self.http_url, scheme="ws")
+
+        self.http_url_login = build_url(self.http_url, URLPATH_LOGIN)
+        self.http_url_kernelspecs = build_url(self.http_url, URLPATH_KERNELSPECS)
+        self.http_url_kernels = build_url(self.http_url, URLPATH_KERNELS)
+        self.http_url_sessions = build_url(self.http_url, URLPATH_SESSIONS)
+        self.ws_url_sessions = build_url(self.ws_url, URLPATH_SESSIONS)
+        self.http_url_contents = build_url(self.http_url, URLPATH_CONTENTS)
 
 
     # def _get_login(self) -> Tuple[httpx.Cookies, httpx.Headers]:
@@ -440,25 +490,46 @@ class GatewayClient(object):
 
         if self.password:
             # self.session = requests.Session()
-            LOGIN_URL = f"{self.BASE_GATEWAY_HTTP_URL}/login"
-            r = self.http_client.get(LOGIN_URL)
+            # ROOT_URL = f"{self.BASE_GATEWAY_HTTP_URL}"
+           
+           
+            client = self.http_client
+            _login_request = client.build_request("GET", self.http_url)
+            request_cookies = httpx.Cookies()
+            while _login_request is not None:
+                r = client.send(_login_request)
+                request_cookies.update(r.cookies)
+                _login_request = r.next_request
+
+            # LOGIN_URL
+            # r = self.http_client.get(self.http_url)
+            # r = self.http_client.get(r.next_request.url)
+            # r = self.http_client.get(r.next_request.url)
             self.xsrf_cookie = r.cookies["_xsrf"]
             self.auth_body = {
                 "_xsrf": self.xsrf_cookie,
                 "password": self.password,
             }
 
-            before_logined = self.http_client.post(LOGIN_URL, data=self.auth_body)
+            before_logined = self.http_client.post(
+                self.http_url_login,
+                data=self.auth_body,
+            )
             assert before_logined.status_code == 302
             request_cookies: httpx.Cookies = dict(r.cookies, **before_logined.cookies)
-            redirected_headers = {
-                "Host": self.BASE_GATEWAY_URL,
-                "Origin": self.BASE_GATEWAY_HTTP_URL,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Referer": LOGIN_URL,
+            origin_headers = {
+                "Host": str(self.url_domain),
+                "Origin": str(URL(self.http_url, path=None)),
             }
+            redirected_headers = dict(
+                origin_headers,
+                # **{
+                #     "Content-Type": "application/x-www-form-urlencoded",
+                #     "Referer": str(self.http_url_login),
+                # }
+            )
             after_logined = self.http_client.post(
-                f"{LOGIN_URL}?next=%2F",
+                URL(self.http_url_login, params={"next": self.url_subpath}),
                 cookies=request_cookies,
                 headers=redirected_headers,
                 data=self.auth_body,
@@ -471,19 +542,23 @@ class GatewayClient(object):
             # self.request_cookies = req_cookies
             self.request_cookies = request_cookies
             self.request_headers = httpx.Headers(
-                {
-                    # "Content-Type": "application/json",
-                    # "X-XSRFToken": req_cookies["_xsrf"],
-                    # "Cookie": after_logined.headers["set-cookie"],
-                    "X-XSRFToken": self.xsrf_cookie,
-                    "Cookie": cookie_header_str,
-                }
+                dict(
+                    origin_headers,
+                    **{
+                    #     "Content-Type": "application/x-www-form-urlencoded",
+                    #     "Referer": str(self.http_url_login),
+                        "Cookie": cookie_header_str,
+                        "X-XSRFToken": self.xsrf_cookie,
+                        
+                    }
+                )
             )
+            r
 
 
     def get_kernelspecs(self) -> List[Dict]:
         resp = self.http_client.get(
-            f"{self.BASE_GATEWAY_HTTP_URL}/api/kernelspecs",
+            self.http_url_kernelspecs,
             cookies=self.request_cookies,
             headers=self.request_headers,
         )
@@ -494,7 +569,7 @@ class GatewayClient(object):
     
     def get_kernels(self) -> List[Dict]:
         resp = self.http_client.get(
-            f"{self.BASE_GATEWAY_HTTP_URL}/api/kernels",
+            self.http_url_kernels,
             params=self.auth_body,
             cookies=self.request_cookies,
             headers=self.request_headers,
@@ -508,7 +583,7 @@ class GatewayClient(object):
         if not kernelspec_name:
             kernelspec_name = self.DEFAULT_KERNEL_NAME
         resp = self.http_client.post(
-            f"{self.BASE_GATEWAY_HTTP_URL}/api/kernels",
+            self.http_url_kernels,
             cookies=self.request_cookies,
             headers=self.request_headers,
             data=json_encode({
@@ -525,7 +600,7 @@ class GatewayClient(object):
         # if not kernelspec_name:
         #     kernelspec_name = self.DEFAULT_KERNEL_NAME
         resp = self.http_client.get(
-            f"{self.BASE_GATEWAY_HTTP_URL}/api/sessions",
+            self.http_url_sessions,
             cookies=self.request_cookies,
             headers=self.request_headers,
         )
@@ -571,7 +646,7 @@ class GatewayClient(object):
         
         file_path = DEFAULT_UUID
         existing_file = self.http_client.get(
-            f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{file_path}",
+            self.http_url_contents.join(file_path),
             cookies=self.request_cookies,
             headers=self.request_headers,
         )
@@ -581,29 +656,38 @@ class GatewayClient(object):
         elif existing_file.status_code == 404:
 
             created_file = self.http_client.post(
-                f"{self.BASE_GATEWAY_HTTP_URL}/api/contents",
-                cookies=self.request_cookies,
-                headers=self.request_headers,
-                params=json_encode({
-                    "type": "file",  # "notebook",
-                    "path": "",
-                    # "path": "/work/test",  # ""
-                })
-            )
-            old_path = created_file.headers.get("location").replace("/api/contents/", "", 1)
-            new_path = DEFAULT_UUID
-            renamed_file = self.http_client.patch(
-                f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{old_path}",
+                self.http_url_contents,
                 cookies=self.request_cookies,
                 headers=self.request_headers,
                 data=json_encode({
-                    "path": new_path,
+                    "type": "file",  # "notebook",
+                    "path": "",
+                    "ext": ""
+                    # "path": "/work/test",  # ""
                 })
-            )
-            if renamed_file.status_code == 200:
-                self.log.debug(f"renamed_file OK: {renamed_file.json()}")
-            elif renamed_file.status_code == 409:
-                self.log.debug(f"renamed_file Conflict: {renamed_file.json()}")
+            ) # 201
+            if created_file.status_code == 201:
+                full_path = PurePath(created_file.headers.get("location"))
+                old_path = (
+                    full_path
+                    .relative_to(joinpaths(self.url_subpath, URLPATH_CONTENTS))
+                    .as_posix()
+                )
+                new_path = DEFAULT_UUID
+                renamed_file = self.http_client.patch(
+                    build_url(self.http_url_contents, old_path),
+                    cookies=self.request_cookies,
+                    headers=self.request_headers,
+                    data=json_encode({
+                        "path": new_path,
+                    })
+                )
+                if renamed_file.status_code == 200:
+                    self.log.debug(f"renamed_file OK: {renamed_file.json()}")
+                elif renamed_file.status_code == 409:
+                    self.log.debug(f"renamed_file Conflict: {renamed_file.json()}")
+            else:
+                raise httpx.RequestError
 
         # deleted_file = self.http_client.delete(
         #     f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{new_path}",
@@ -638,7 +722,7 @@ class GatewayClient(object):
             request_headers = self.request_headers.copy()
             request_headers["content-length"] = str(len(data_json))
             created_or_existing_session = self.http_client.post(
-                f"{self.BASE_GATEWAY_HTTP_URL}/api/sessions",
+                self.http_url_sessions,
                 cookies=self.request_cookies,
                 headers=request_headers,
                 data=data_json,
@@ -659,8 +743,8 @@ class GatewayClient(object):
 
 
         return KernelClient(
-            self.http_api_endpoint,
-            self.ws_api_endpoint,
+            self.http_url,
+            self.ws_url,
             kernel_id,
             session_id,
             timeout=30,
@@ -747,7 +831,7 @@ class GatewayClient(object):
 
         kernel.shutdown()
 
-        url = "{}/{}".format(self.http_api_endpoint, kernel.kernel_id)
+        url = "{}/{}".format(self.http_url, kernel.kernel_id)
         response = self.session.delete(
             url,
             params=self._get_xsrf_params(),
