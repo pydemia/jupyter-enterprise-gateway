@@ -13,12 +13,12 @@ def test_custom_client():
     DEFAULT_KERNELSPEC_NAME = "python3"
 
 
-    BASE_GATEWAY_URL = "http://localhost:8888"
-    PASSWORD = "zxc"
+    # BASE_GATEWAY_URL = "http://localhost:8888"
+    # PASSWORD = "zxc"
 
     start_dt = dt.datetime.now()
     gw_client = GatewayClient(host=BASE_GATEWAY_URL, password=PASSWORD)
-    print(f"GateWayClient: elapsed: {dt.datetime.now() - start_dt}")
+    print(f"GateWayClient: elapsed: {dt.datetime.now() - start_dt}", sep="\n")
     gw_client.DEFAULT_USERNAME = DEFAULT_USERNAME
 
     start_dt = dt.datetime.now()
@@ -28,7 +28,7 @@ def test_custom_client():
     #     timeout=REQUEST_TIMEOUT,
     # )
     kernel_client: KernelClient = gw_client.get_client()
-    print(f"KernelClient: elapsed: {dt.datetime.now() - start_dt}")
+    print(f"KernelClient: elapsed: {dt.datetime.now() - start_dt}", sep="\n")
 
     code0 = """
 print("test")    
@@ -72,11 +72,11 @@ b
     msg3 = decode_cellmsg(result3)
     msg4 = decode_cellmsg(result4)
 
-    print(msg0, f"MSG0: elapsed: {elapsed0}")
-    print(msg1, f"MSG1: elapsed: {elapsed1}")
-    print(msg2, f"MSG2: elapsed: {elapsed2}")
-    print(msg3, f"MSG3: elapsed: {elapsed3}")
-    print(msg4, f"MSG3: elapsed: {elapsed4}")
+    print(msg0, f"MSG0: elapsed: {elapsed0}", sep="\n")
+    print(msg1, f"MSG1: elapsed: {elapsed1}", sep="\n")
+    print(msg2, f"MSG2: elapsed: {elapsed2}", sep="\n")
+    print(msg3, f"MSG3: elapsed: {elapsed3}", sep="\n")
+    print(msg4, f"MSG3: elapsed: {elapsed4}", sep="\n")
     # kernel_client.restart()
 
     # async def execute(code: str, kernel_client: KernelClient):

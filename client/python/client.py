@@ -1,4 +1,4 @@
-from typing import Dict, Union, Optional, List, Tuple
+from typing import Dict, Union, Optional, List, Tuple, Iterable
 
 import datetime as dt
 from autologging import logged
@@ -39,9 +39,13 @@ from jupyter_client import BlockingKernelClient, AsyncKernelClient
 
 import ast
 
-def decode_cellmsg(res: str):
-    interruptable_msg = ast.literal_eval(f"b'''{res}'''").decode()
-    return interruptable_msg
+def decode_cellmsg(res: Union[str, List[str]]):
+    if isinstance(res, str):
+        res = [res]
+    msg = ["\n".join(m) if isinstance(m, list) else m for m in res]
+    # msg = [ast.literal_eval(f"b'''{m}'''").decode() for m in res]
+    return '\n'.join(msg)
+    # return msg
 
 
 
@@ -212,9 +216,18 @@ class KernelClient(object):
                     if response_message_type == 'error' or \
                             (response_message_type == 'execute_reply' and
                              response_message['content']['status'] == 'error'):
-                        response.append('{}:{}:{}'.format(response_message['content']['ename'],
-                                                          response_message['content']['evalue'],
-                                                          response_message['content']['traceback']))
+                        response.extend(
+                            [
+                                '{} : {}'.format(
+                                    response_message['content']['ename'],
+                                    response_message['content']['evalue'],
+                                ),
+                                response_message['content']['traceback'],
+                            ]
+                        )
+                        # response.append('{}:{}:{}'.format(response_message['content']['ename'],
+                        #                                   response_message['content']['evalue'],
+                        #                                   response_message['content']['traceback']))
                     elif response_message_type == 'stream':
                         response.append(KernelClient._convert_raw_response(response_message['content']['text']))
 
@@ -246,7 +259,8 @@ class KernelClient(object):
         end_dt = dt.datetime.now()
         elapsed_dt = end_dt - start_dt
         self.log.debug(f"ELAPSED TIME: {elapsed_dt}")
-        return ''.join(response), elapsed_dt
+        return response, elapsed_dt
+        # return ''.join(response), elapsed_dt
 
     def interrupt(self):
         url = "{}/{}".format(self.kernel_http_api_endpoint, "interrupt")
