@@ -12,6 +12,9 @@ def test_custom_client():
     REQUEST_TIMEOUT = TIMEOUT = 120
     DEFAULT_KERNELSPEC_NAME = "python3"
 
+    
+    # BASE_GATEWAY_URL = "https://aiip-dev.skcc.com/modeler/sandbox/6714"
+    # PASSWORD = "skcc1234!"
 
     BASE_GATEWAY_URL = "http://localhost:8888"
     PASSWORD = "zxc"
