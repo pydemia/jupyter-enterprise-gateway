@@ -7,14 +7,13 @@ logging.basicConfig(level="INFO")
 log = logging.getLogger("TEST Jupyter Client")
 
 def test_custom_client():
-    
+
     DEFAULT_USERNAME = "jovyan"
     REQUEST_TIMEOUT = TIMEOUT = 120
     DEFAULT_KERNELSPEC_NAME = "python3"
 
-
-    # BASE_GATEWAY_URL = "http://localhost:8888"
-    # PASSWORD = "zxc"
+    BASE_GATEWAY_URL = "http://localhost:8888"
+    PASSWORD = "zxc"
 
     start_dt = dt.datetime.now()
     gw_client = GatewayClient(host=BASE_GATEWAY_URL, password=PASSWORD)
@@ -64,7 +63,7 @@ b
     result1, elapsed1 = kernel_client.execute(code1)
     result2, elapsed2 = kernel_client.execute(code2)
     result3, elapsed3 = kernel_client.execute(code3)
-    result4, elapsed4 = kernel_client.execute(code3)
+    result4, elapsed4 = kernel_client.execute(code4)
 
     msg0 = decode_cellmsg(result0)
     msg1 = decode_cellmsg(result1)
