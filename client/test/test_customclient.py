@@ -63,7 +63,7 @@ b
     result1, elapsed1 = kernel_client.execute(code1)
     result2, elapsed2 = kernel_client.execute(code2)
     result3, elapsed3 = kernel_client.execute(code3)
-    result4, elapsed4 = kernel_client.execute(code3)
+    result4, elapsed4 = kernel_client.execute(code4)
 
     msg0 = decode_cellmsg(result0)
     msg1 = decode_cellmsg(result1)
