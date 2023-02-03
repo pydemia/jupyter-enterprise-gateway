@@ -21,6 +21,7 @@ async def request(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -33,7 +34,7 @@ async def request(
             transport=transport,
             cookies=cookies,
             ) as client:
-        resp = await client.request(*args, **kwargs)
+        resp = await client.request(*args, timeout=timeout, **kwargs)
         return resp
 
 
@@ -41,6 +42,7 @@ async def get(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -53,7 +55,7 @@ async def get(
             transport=transport,
             cookies=cookies,
             ) as client:
-        resp = await client.get(*args, **kwargs)
+        resp = await client.get(*args, timeout=timeout, **kwargs)
         return resp
 
 
@@ -61,6 +63,7 @@ async def post(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -73,7 +76,7 @@ async def post(
             transport=transport,
             cookies=cookies,
             ) as client:
-        resp = await client.post(*args, **kwargs)
+        resp = await client.post(*args, timeout=timeout, **kwargs)
         return resp
 
 
@@ -81,6 +84,7 @@ async def put(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -93,7 +97,7 @@ async def put(
             transport=transport,
             cookies=cookies,
             ) as client:
-        resp = await client.put(*args, **kwargs)
+        resp = await client.put(*args, timeout=timeout, **kwargs)
         return resp
 
 
@@ -101,6 +105,7 @@ async def delete(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -113,7 +118,7 @@ async def delete(
             transport=transport,
             cookies=cookies,
             ) as client:
-        resp = await client.delete(*args, **kwargs)
+        resp = await client.delete(*args, timeout=timeout, **kwargs)
         return resp
 
 
@@ -121,6 +126,7 @@ async def head(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -133,7 +139,7 @@ async def head(
             transport=transport,
             cookies=cookies,
             ) as client:
-        resp = await client.head(*args, **kwargs)
+        resp = await client.head(*args, timeout=timeout, **kwargs)
         return resp
 
 
@@ -141,6 +147,7 @@ async def patch(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -153,7 +160,7 @@ async def patch(
             transport=transport,
             cookies=cookies,
             ) as client:
-        resp = await client.patch(*args, **kwargs)
+        resp = await client.patch(*args, timeout=timeout, **kwargs)
         return resp
 
 
@@ -161,6 +168,7 @@ async def options(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -173,7 +181,7 @@ async def options(
             transport=transport,
             cookies=cookies,
     ) as client:
-        resp = await client.options(*args, **kwargs)
+        resp = await client.options(*args, timeout=timeout, **kwargs)
         return resp
 
 
@@ -181,6 +189,7 @@ async def stream(
         *args,
         transport: Optional[httpx.AsyncBaseTransport] = httpx.AsyncHTTPTransport(retries=1),
         cookies: Optional[Union[Dict, httpx.Cookies]] = None,
+        timeout=300.0,
         **kwargs
         ):
     if "hooks" in kwargs:
@@ -193,5 +202,5 @@ async def stream(
             transport=transport,
             cookies=cookies,
             ) as client:
-        resp = await client.stream(*args, **kwargs)
+        resp = await client.stream(*args, timeout=timeout, **kwargs)
         return resp

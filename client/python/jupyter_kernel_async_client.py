@@ -10,7 +10,7 @@ from uuid import uuid4
 from tornado.escape import json_encode, json_decode, utf8
 from threading import Thread
 import websocket
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 120))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", 300))
 log_level = os.getenv("LOG_LEVEL", "INFO")
 
 
@@ -80,39 +80,50 @@ class KernelClient(object):
         self.shutting_down = False
         self.restarting = False
         self.http_url = http_api_endpoint
-        # self.kernel_http_api_endpoint = '{}/{}'.format(http_api_endpoint, kernel_id)
         self.ws_url = ws_api_endpoint
-        # self.kernel_ws_api_endpoint = '{}/{}/channels'.format(ws_api_endpoint, kernel_id)
         self.kernel_id = kernel_id
         self.session_id = session_id
-        # self.cookies = httpx.Cookies(cookies)
-        # self.headers = httpx.Headers(headers)
         self.cookies = httpx.Cookies(cookies)
         self.headers = httpx.Headers(headers)
         self.params = params
         self.timeout = timeout
         self.log = logging.getLogger('GatewayClient')
         self.log.setLevel(log_level)
-        # self.log.debug('Initializing kernel client ({}) to {}'.format(kernel_id, self.kernel_ws_api_endpoint))
 
         self.http_url_login = build_url(self.http_url, URLPATH_LOGIN)
         self.http_url_kernelspecs = build_url(self.http_url, URLPATH_KERNELSPECS)
         self.http_url_kernels = build_url(self.http_url, URLPATH_KERNELS)
         self.http_url_sessions = build_url(self.http_url, URLPATH_SESSIONS)
-        self.ws_url_kernels = build_url(self.ws_url, URLPATH_KERNELS, kernel_id, "channels", params={"session_id": session_id})
         self.ws_url_sessions = build_url(self.ws_url, URLPATH_SESSIONS)
         self.http_url_contents = build_url(self.http_url, URLPATH_CONTENTS)
 
+        self.http_api_endpoint = build_url(
+            self.http_url,
+            URLPATH_KERNELS,
+            kernel_id,
+        )
+        self.ws_api_endpoint = build_url(
+            self.ws_url,
+            URLPATH_KERNELS,
+            kernel_id,
+            "channels",
+            params={"session_id": session_id},
+        )
+        self.http_api_endpoint_interrupt = build_url(
+            self.http_api_endpoint,
+            "interrupt",
+        )
+        self.http_api_endpoint_restart = build_url(
+            self.http_api_endpoint,
+            "restart",
+        )
 
-        params_dict = {"session_id": self.session_id}
-        params_str = "&".join([
-            f"{k}={v}" for k, v in params_dict.items()
-        ])
+
+        self.log.debug('Initializing kernel client ({}) to {}'.format(kernel_id, self.ws_api_endpoint))
 
         self.http_client = httpx.Client()
         checked_session = self.http_client.get(
             build_url(self.http_url_sessions, session_id),
-            # f"http://localhost:8888/api/sessions/{session_id}",
             cookies=self.cookies,
             headers=self.headers,
         )
@@ -127,49 +138,52 @@ class KernelClient(object):
         #   last_activity: datetime_str
         #   execution_state: str
         #   connections: int
-        cookie_header_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-        session_info: Dict = checked_session.json()
-        headers.update(
-            {
-                "Accept": "*/*",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-                "X-XSRFToken": cookie_header_str,
-                "Upgrade": "websocket",
-                "Connection": "Upgrade",
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "same-origin",
-                "Sec-WebSocket-Key": generate_key(),
-                "Sec-WebSocket-Version": "13",
-                "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
-            }
-        )
+        self._cookie_header_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+        # session_info: Dict = checked_session.json()
+        # headers.update(
+        #     {
+        #         "Accept": "*/*",
+        #         "Cache-Control": "no-cache",
+        #         "Pragma": "no-cache",
+        #         "Cookie": self._cookie_header_str,
+        #         "X-XSRFToken": self.cookies["_xsrf"],
+        #         "Upgrade": "websocket",
+        #         "Connection": "Upgrade",
+        #         "Sec-Fetch-Dest": "empty",
+        #         "Sec-Fetch-Mode": "cors",
+        #         "Sec-Fetch-Site": "same-origin",
+        #         "Sec-WebSocket-Key": generate_key(),
+        #         "Sec-WebSocket-Version": "13",
+        #         "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
+        #     }
+        # )
         available_kernels = self.http_client.get(
             self.http_url_kernels,
-            cookies=cookies,
-            headers=headers,
-            params=params,
+            cookies=self.cookies,
+            headers=self.headers,
         )
         available_kernels = available_kernels.json()
+        self._create_ws_connection()
 
+
+    def _create_ws_connection(self):
         self.websocket_extra_headers = {
-            "X-XSRFToken": cookies["_xsrf"],
-            "Cookie": cookie_header_str,
+            "X-XSRFToken": self.cookies["_xsrf"],
+            "Cookie": self._cookie_header_str,
         }
 
         try:
             self.kernel_socket = websocket.create_connection(
-                # build_url(self.ws_url_kernels, kernel_id, "channels", params={"session_id": session_id}),
-                str(self.ws_url_kernels),
-                # f"ws://localhost:8888/api/kernels/{kernel_id}/channels?session_id={session_id}",
-                timeout=self.timeout,  # timeout,
+                str(self.ws_api_endpoint),
+                timeout=self.timeout,
                 enable_multithread=True,
                 header=self.websocket_extra_headers,
             )
+            self.log.debug(f'Kernel {self.kernel_id} connected')
 
         except websocket.WebSocketBadStatusException as e:
             self.kernel_socket = None
+            self.log.debug(f'Kernel {self.kernel_id} cannot be connected')
             raise e
 
         self.response_queues = {}
@@ -198,10 +212,13 @@ class KernelClient(object):
                 self.log.warning("Response reader thread is not terminated, continuing...")
             self.response_reader = None
 
-    def execute(self, code, timeout=REQUEST_TIMEOUT):# -> Tuple[str, datetime]:
+    def execute(self, code, timeout=REQUEST_TIMEOUT) -> Tuple[Iterable[str], dt.timedelta]:
         """
         Executes the code provided and returns the result of that execution.
         """
+        if not self.kernel_socket:
+            self._create_ws_connection()
+
         start_dt = dt.datetime.now()
         response = []
         try:
@@ -260,51 +277,68 @@ class KernelClient(object):
         elapsed_dt = end_dt - start_dt
         self.log.debug(f"ELAPSED TIME: {elapsed_dt}")
         return response, elapsed_dt
-        # return ''.join(response), elapsed_dt
+
 
     def interrupt(self):
-        url = "{}/{}".format(self.kernel_http_api_endpoint, "interrupt")
-        response = requests.post(url)
-        if response.status_code == 204:
+        resp = self.http_client.post(
+            self.http_api_endpoint_interrupt,
+            cookies=self.cookies,
+            headers=self.headers,
+        )
+        if resp.status_code == 204:
             self.log.debug('Kernel {} interrupted'.format(self.kernel_id))
             return True
         else:
-            raise RuntimeError('Unexpected response interrupting kernel {}: {}'.
-                               format(self.kernel_id, response.content))
-
-    def restart(self, timeout=REQUEST_TIMEOUT):
-        self.restarting = True
-        self.kernel_socket.close()
-        self.kernel_socket = None
-        url = "{}/{}".format(self.kernel_http_api_endpoint, "restart")
-        response = requests.post(url)
-        if response.status_code == 200:
-            self.log.debug('Kernel {} restarted'.format(self.kernel_id))
-            self.kernel_socket = websocket.create_connection(
-                self.kernel_ws_api_endpoint,
-                # f"ws://localhost:8888/api/kernels/{kernel_id}/channels?session_id={session_id}",
-                timeout=self.timeout,  # timeout,
-                enable_multithread=True,
-                header=self.websocket_extra_headers,
+            raise RuntimeError(
+                'Unexpected response interrupting kernel {}: {}'.format(
+                    self.kernel_id,
+                    resp.content,
+                )
             )
-            # self.kernel_socket = \
-            #     websocket.create_connection(self.kernel_ws_api_endpoint, timeout=timeout, enable_multithread=True)
+
+    def restart(self):
+        self.restarting = True
+        if self.kernel_socket:
+            self.kernel_socket.close()
+            self.kernel_socket = None
+
+        resp = self.http_client.post(
+            self.http_api_endpoint_restart,
+            cookies=self.cookies,
+            headers=self.headers,
+        )
+        if resp.status_code == 200:
+            self.log.debug('Kernel {} restarted'.format(self.kernel_id))
+            self._create_ws_connection()
             self.restarting = False
             return True
         else:
             self.restarting = False
-            raise RuntimeError('Unexpected response restarting kernel {}: {}'.format(self.kernel_id, response.content))
+            raise RuntimeError(
+                'Unexpected response restarting kernel {}: {}'.format(
+                    self.kernel_id,
+                    resp.content
+                )
+            )
 
     def get_state(self):
-        url = "{}".format(self.kernel_http_api_endpoint)
-        response = requests.get(url)
-        if response.status_code == 200:
-            json = response.json()
+        
+        resp = self.http_client.get(
+            self.http_api_endpoint,
+            cookies=self.cookies,
+            headers=self.headers,
+        )
+        if resp.status_code == 200:
+            json = resp.json()
             self.log.debug('Kernel {} state: {}'.format(self.kernel_id, json))
             return json['execution_state']
         else:
-            raise RuntimeError('Unexpected response retrieving state for kernel {}: {}'.
-                               format(self.kernel_id, response.content))
+            raise RuntimeError(
+                'Unexpected response retrieving state for kernel {}: {}'.format(
+                    self.kernel_id,
+                    resp.content,
+                )
+            )
 
     def start_interrupt_thread(self, wait_time=DEFAULT_INTERRUPT_WAIT):
         self.interrupt_thread = Thread(target=self.perform_interrupt, args=(wait_time,))
@@ -503,10 +537,6 @@ class GatewayClient(object):
     def _get_login(self) -> None:
 
         if self.password:
-            # self.session = requests.Session()
-            # ROOT_URL = f"{self.BASE_GATEWAY_HTTP_URL}"
-           
-           
             client = self.http_client
             _login_request = client.build_request("GET", self.http_url)
             request_cookies = httpx.Cookies()
@@ -515,10 +545,6 @@ class GatewayClient(object):
                 request_cookies.update(r.cookies)
                 _login_request = r.next_request
 
-            # LOGIN_URL
-            # r = self.http_client.get(self.http_url)
-            # r = self.http_client.get(r.next_request.url)
-            # r = self.http_client.get(r.next_request.url)
             self.xsrf_cookie = r.cookies["_xsrf"]
             self.auth_body = {
                 "_xsrf": self.xsrf_cookie,
@@ -530,7 +556,10 @@ class GatewayClient(object):
                 data=self.auth_body,
             )
             assert before_logined.status_code == 302
-            request_cookies: httpx.Cookies = dict(r.cookies, **before_logined.cookies)
+            request_cookies: httpx.Cookies = dict(
+                r.cookies,
+                **before_logined.cookies,
+            )
             origin_headers = {
                 "Host": str(self.url_domain),
                 "Origin": str(URL(self.http_url, path=None)),
@@ -549,26 +578,21 @@ class GatewayClient(object):
                 data=self.auth_body,
             )
             assert after_logined.status_code == 302
-            # # self.request_headers = after_logined.headers
-            # self.request_cookies = after_logined.headers['set-cookie']
 
-            cookie_header_str = "; ".join([f"{k}={v}" for k, v in request_cookies.items()])
-            # self.request_cookies = req_cookies
+            cookie_header_str = "; ".join(
+                [f"{k}={v}" for k, v in request_cookies.items()]
+            )
             self.request_cookies = request_cookies
             self.request_headers = httpx.Headers(
                 dict(
                     origin_headers,
                     **{
-                    #     "Content-Type": "application/x-www-form-urlencoded",
-                    #     "Referer": str(self.http_url_login),
                         "Cookie": cookie_header_str,
                         "X-XSRFToken": self.xsrf_cookie,
                         
                     }
                 )
             )
-            r
-
 
     def get_kernelspecs(self) -> List[Dict]:
         resp = self.http_client.get(
@@ -584,7 +608,6 @@ class GatewayClient(object):
     def get_kernels(self) -> List[Dict]:
         resp = self.http_client.get(
             self.http_url_kernels,
-            params=self.auth_body,
             cookies=self.request_cookies,
             headers=self.request_headers,
         )
@@ -592,6 +615,33 @@ class GatewayClient(object):
             return resp.json()
         else:
             raise httpx.RequestError
+    
+    def get_kernel(self, kernel_id: str) -> Dict:
+        resp = self.http_client.get(
+            build_url(self.http_url_kernels, kernel_id),
+            cookies=self.request_cookies,
+            headers=self.request_headers,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            raise httpx.RequestError
+    
+    def delete_kernel(self, kernel_id: str) -> Dict:
+        resp = self.http_client.delete(
+            build_url(self.http_url_kernels, kernel_id),
+            cookies=self.request_cookies,
+            headers=self.request_headers,
+        )
+        if resp.status_code == 204:
+            return True
+        else:
+            raise httpx.RequestError(
+                'Error shutting down kernel {}: {}'.format(
+                    kernel_id,
+                    resp.content
+                )
+            )
     
     def start_new_kernel(self, kernelspec_name: str = None) -> Dict:
         if not kernelspec_name:
@@ -620,106 +670,48 @@ class GatewayClient(object):
         )
         if resp.status_code == 200:
             if kernelspec_name:
-                return [k for k in resp.json() if k.kernel == kernelspec_name]
+                return [k for k in resp.json() if k["kernel"]["name"] == kernelspec_name]
             else:
                 return resp.json()
         else:
             raise httpx.RequestError
 
 
-    def get_client(self, default_kernelspec_name: str = "python3", timeout: int = REQUEST_TIMEOUT) -> KernelClient:
+    def get_client(
+            self,
+            kernelspec_name: str = "python3",
+            ws_timeout: int = REQUEST_TIMEOUT,
+            ) -> KernelClient:
 
         self.kernelspecs = self.get_kernelspecs()
         self.DEFAULT_KERNEL_NAME = self.kernelspecs["default"]
 
-        if default_kernelspec_name in self.kernelspecs["kernelspecs"]:
-            self.DEFAULT_KERNEL_NAME = default_kernelspec_name
-            self.log.warn("Use kernelspec name '{default_kernelspec_name}' as default...")
+        if kernelspec_name in self.kernelspecs["kernelspecs"]:
+            self.DEFAULT_KERNEL_NAME = kernelspec_name
+            self.log.warning("Use kernelspec name '{default_kernelspec_name}' as default...")
         else:
-            self.log.warn("The given kernelspec name '{kernelspec_name}' does not exist. use system default '{self.DEFAULT_KERNEL_NAME}' instead...")
+            self.log.warning("The given kernelspec name '{kernelspec_name}' does not exist. use system default '{self.DEFAULT_KERNEL_NAME}' instead...")
 
-        kernel_info = {
-            'name': self.DEFAULT_KERNEL_NAME,
-            # 'env': {
-            #     'KERNEL_USERNAME': username,
-            #     'KERNEL_LAUNCH_TIMEOUT': self.KERNEL_LAUNCH_TIMEOUT,
-            # }
-        }
+        # kernel_info = {
+        #     'name': self.DEFAULT_KERNEL_NAME,
+        #     # 'env': {
+        #     #     'KERNEL_USERNAME': username,
+        #     #     'KERNEL_LAUNCH_TIMEOUT': self.KERNEL_LAUNCH_TIMEOUT,
+        #     # }
+        # }
 
         kernels_opened: List[Dict] = self.get_kernels()
         try:
             kernel_info: Dict = kernels_opened[0]
         except IndexError:
-            kernel_info: Dict = self.start_new_kernel(kernelspec_name=None)
+            kernel_info: Dict = self.start_new_kernel(kernelspec_name=kernelspec_name)
 
         self.log.debug(f"kernel_info: {kernel_info}")
         kernel_id: str = kernel_info["id"]
-        
-        available_sessions: List[Dict] = self.get_sessions(kernelspec_name=None)
-        self.log.debug(f"available_sessions: {available_sessions}")
-        
-        file_path = DEFAULT_UUID
-        existing_file = self.http_client.get(
-            self.http_url_contents.join(file_path),
-            cookies=self.request_cookies,
-            headers=self.request_headers,
+
+        available_sessions: List[Dict] = self.get_sessions(
+            kernelspec_name=kernelspec_name,
         )
-
-        if existing_file.status_code == 200:
-            pass
-        elif existing_file.status_code == 404:
-
-            created_file = self.http_client.post(
-                self.http_url_contents,
-                cookies=self.request_cookies,
-                headers=self.request_headers,
-                data=json_encode({
-                    "type": "file",  # "notebook",
-                    "path": "",
-                    "ext": ""
-                    # "path": "/work/test",  # ""
-                })
-            ) # 201
-            if created_file.status_code == 201:
-                full_path = PurePath(created_file.headers.get("location"))
-                old_path = (
-                    full_path
-                    .relative_to(joinpaths(self.url_subpath, URLPATH_CONTENTS))
-                    .as_posix()
-                )
-                new_path = DEFAULT_UUID
-                renamed_file = self.http_client.patch(
-                    build_url(self.http_url_contents, old_path),
-                    cookies=self.request_cookies,
-                    headers=self.request_headers,
-                    data=json_encode({
-                        "path": new_path,
-                    })
-                )
-                if renamed_file.status_code == 200:
-                    self.log.debug(f"renamed_file OK: {renamed_file.json()}")
-                elif renamed_file.status_code == 409:
-                    self.log.debug(f"renamed_file Conflict: {renamed_file.json()}")
-            else:
-                raise httpx.RequestError
-
-        # deleted_file = self.http_client.delete(
-        #     f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{new_path}",
-        #     cookies=self.request_cookies,
-        #     headers=self.request_headers,
-        # )
-        # if deleted_file.status_code == 204:
-        #     print("OK", "No Content")
-        # self.request_headers = httpx.Headers(
-        #         {
-        #             "Content-Type": "application/json",
-        #             "Content"
-        #             "X-XSRFToken": req_cookies["_xsrf"],
-        #             # "Cookie": after_logined.headers["set-cookie"],
-        #         }
-        #     )
-
-        available_sessions: List[Dict] = self.get_sessions(kernelspec_name=None)
         self.log.debug(f"available_sessions: {available_sessions}")
         if available_sessions:
             available_session = available_sessions[0]
@@ -728,9 +720,9 @@ class GatewayClient(object):
 
             data_json = json_encode({
                 "kernel": kernel_info,
-                "name": f"{self.DEFAULT_USERNAME}-{file_path}",
+                "name": f"session-{kernelspec_name}-{kernel_id}",
                 "type": "file",
-                "path": file_path,
+                "path": "",
                 "_xsrf": self.xsrf_cookie,
             })
             request_headers = self.request_headers.copy()
@@ -761,99 +753,29 @@ class GatewayClient(object):
             self.ws_url,
             kernel_id,
             session_id,
-            timeout=30,
+            timeout=ws_timeout,
             logger=self.log,
             cookies=self.request_cookies,
             headers=self.request_headers,
             params=self.auth_body,
         )
 
-    # def start_kernel(self, kernelspec_name="python3", username=DEFAULT_USERNAME, timeout=REQUEST_TIMEOUT):
-    #     self.log.debug('Starting a {} kernel ....'.format(kernelspec_name))
 
-    #     if kernelspec_name in self.kernelspecs["kernelspecs"]:
-    #         system_default = self.kernelspecs["default"]
-    #         print("The given name '{kernelspec_name}' does not exist. use '{system_default}' instead...")
-    #         kernelspec_name = system_default
+    def shutdown_client(self, kernel_client: KernelClient):
+        self.log.debug(
+            "Shutting down kernel : {} ....".format(
+                kernel_client.kernel_id
+            )
+        )
 
-    #     json_data = {
-    #         'name': kernelspec_name,
-    #         # 'env': {
-    #         #     'KERNEL_USERNAME': username,
-    #         #     'KERNEL_LAUNCH_TIMEOUT': self.KERNEL_LAUNCH_TIMEOUT,
-    #         # }
-    #     }
-
-    #     # json_data = self._add_xsrf_cookie(json_data)
-
-    #     # json_data.update({"_xsrf": self.xsrf_cookie})
-    #     kernel_info: Dict = {"name": kernelspec_name}
-    #     available_sessions: List[Dict] = self.http_client.get(
-    #         f"{self.BASE_GATEWAY_HTTP_URL}/api/sessions",
-    #         cookies=self.request_cookies,
-    #         headers=self.request_headers,
-    #         # data=json_encode(json_data)
-    #         # data={
-    #         #     "id": None,
-    #         #     "kernel": kernel_info,
-    #         #     # "name": f"{self.DEFAULT_USERNAME}-2413",
-    #         #     # "path": DEFAULT_UUID,
-    #         #     "type": "notebook",
-    #         # }
-    #         # data=json_encode(self._add_xsrf_cookie(json_data))
-    #     )
-
-    #     # See: https://jupyter-notebook.readthedocs.io/en/stable/extending/contents.html#filesystem-entities
-    #     created_directory = self.http_client.post(
-    #         f"{self.BASE_GATEWAY_HTTP_URL}/api/contents",
-    #         cookies=self.request_cookies,
-    #         headers=self.request_headers,
-    #         data=json_encode({
-    #             "type": "directory",  # "notebook", "file"
-    #             "path": "",
-    #             # "path": "/work/test",  # ""
-    #         })
-    #     )
-    #     old_path = created_directory.headers.get("location").replace("/api/contents/", "", 1)
-    #     new_path = DEFAULT_UUID
-    #     renamed_directory = self.http_client.patch(
-    #         f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{old_path}",
-    #         cookies=self.request_cookies,
-    #         headers=self.request_headers,
-    #         data=json_encode({
-    #             "path": new_path,
-    #         })
-    #     )
-    #     if renamed_directory.status_code == 200:
-    #         print("OK")
-    #     elif renamed_directory.status_code == 409:
-    #         print("Conflict")
-    #     deleted_directory = self.http_client.delete(
-    #         f"{self.BASE_GATEWAY_HTTP_URL}/api/contents/{new_path}",
-    #         cookies=self.request_cookies,
-    #         headers=self.request_headers,
-    #     )
-    #     if deleted_directory.status_code == 204:
-    #         print("OK", "No Content")
-
-
-    def shutdown_kernel(self, kernel):
-        self.log.debug("Shutting down kernel : {} ....".format(kernel.kernel_id))
-
-        if not kernel:
+        if not kernel_client:
             return False
 
-        kernel.shutdown()
+        kernel_client.shutdown()
 
-        url = "{}/{}".format(self.http_url, kernel.kernel_id)
-        response = self.session.delete(
-            url,
-            params=self._get_xsrf_params(),
-        )
-        if response.status_code == 204:
-            self.log.debug('Kernel {} shutdown'.format(kernel.kernel_id))
-            self.session.close()
+        try:
+            self.delete_kernel(kernel_id=kernel_client.kernel_id)
+            self.log.debug('Kernel {} shutdown'.format(kernel_client.kernel_id))
             return True
-        else:
-            raise RuntimeError('Error shutting down kernel {}: {}'.format(kernel.kernel_id, response.content))
-
+        except httpx.RequestError as e:
+            raise e
