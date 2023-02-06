@@ -122,11 +122,12 @@ class KernelClient(object):
         self.log.debug('Initializing kernel client ({}) to {}'.format(kernel_id, self.ws_api_endpoint))
 
         self.http_client = httpx.Client()
-        checked_session = self.http_client.get(
-            build_url(self.http_url_sessions, session_id),
-            cookies=self.cookies,
-            headers=self.headers,
-        )
+        # checked_session = self.http_client.get(
+        #     build_url(self.http_url_sessions, session_id),
+        #     cookies=self.cookies,
+        #     headers=self.headers,
+        # )
+
         # Session_Info Dict
         # id: uuid_str (session_id)
         # name: str (session_name)
@@ -157,12 +158,12 @@ class KernelClient(object):
         #         "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
         #     }
         # )
-        available_kernels = self.http_client.get(
-            self.http_url_kernels,
-            cookies=self.cookies,
-            headers=self.headers,
-        )
-        available_kernels = available_kernels.json()
+        # available_kernels = self.http_client.get(
+        #     self.http_url_kernels,
+        #     cookies=self.cookies,
+        #     headers=self.headers,
+        # )
+        # available_kernels = available_kernels.json()
         self._create_ws_connection()
 
 

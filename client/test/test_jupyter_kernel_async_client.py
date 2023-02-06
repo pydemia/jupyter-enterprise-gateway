@@ -59,9 +59,10 @@ b
 """
 
 
-    result0, elapsed0 = kernel_client.execute(code0)
-    result1, elapsed1 = kernel_client.execute(code1)
-    result2, elapsed2 = kernel_client.execute(code2)
+    import asyncio
+    result0 = asyncio.run(kernel_client.execute_async(code0))
+    result1 = asyncio.run(kernel_client.execute_async(code1))
+    result2, elapsed2 = kernel_client.execute_sync(code2)
     result3, elapsed3 = kernel_client.execute(code3)
     result4, elapsed4 = kernel_client.execute(code4)
 

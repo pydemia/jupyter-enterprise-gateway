@@ -121,12 +121,14 @@ class KernelClient(object):
 
         self.log.debug('Initializing kernel client ({}) to {}'.format(kernel_id, self.ws_api_endpoint))
 
-        self.http_client = httpx.Client()
-        checked_session = self.http_client.get(
-            build_url(self.http_url_sessions, session_id),
-            cookies=self.cookies,
-            headers=self.headers,
-        )
+        # self.http_client = httpx.Client()
+        self.http_client = async_client
+        # checked_session = self.http_client.get(
+        #     build_url(self.http_url_sessions, session_id),
+        #     cookies=self.cookies,
+        #     headers=self.headers,
+        # )
+
         # Session_Info Dict
         # id: uuid_str (session_id)
         # name: str (session_name)
@@ -157,14 +159,49 @@ class KernelClient(object):
         #         "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits",
         #     }
         # )
-        available_kernels = self.http_client.get(
-            self.http_url_kernels,
-            cookies=self.cookies,
-            headers=self.headers,
-        )
-        available_kernels = available_kernels.json()
-        self._create_ws_connection()
+        # available_kernels = self.http_client.get(
+        #     self.http_url_kernels,
+        #     cookies=self.cookies,
+        #     headers=self.headers,
+        # )
+        # available_kernels = available_kernels.json()
+        # self._async_ws()
+        self.websocket_extra_headers = {
+            "X-XSRFToken": self.cookies["_xsrf"],
+            "Cookie": self._cookie_header_str,
+        }
+        # self._create_ws_connection()
 
+    # async def _async_ws(self):
+    #     self.websocket_extra_headers = {
+    #         "X-XSRFToken": self.cookies["_xsrf"],
+    #         "Cookie": self._cookie_header_str,
+    #     }
+    #     self.ws = websockets.connect(
+    #         str(self.ws_api_endpoint),
+    #         timeout=self.timeout,
+    #         # enable_multithread=True,
+    #         extra_headers=self.websocket_extra_headers,
+    #     )
+    #     self.websocket_extra_headers
+        # async with websockets.connect(
+        #         str(self.ws_api_endpoint),
+        #         timeout=self.timeout,
+        #         # enable_multithread=True,
+        #         extra_headers=self.websocket_extra_headers,
+        #     ) as ws:
+        #     await ws.send("print")
+        #     await ws.recv()
+
+    async def execute_async(self, code, timeout=REQUEST_TIMEOUT):
+        async with websockets.connect(
+            str(self.ws_api_endpoint),
+            timeout=self.timeout,
+            # enable_multithread=True,
+            extra_headers=self.websocket_extra_headers,
+        ) as ws:
+            await ws.send(code)
+            await ws.recv()
 
     def _create_ws_connection(self):
         self.websocket_extra_headers = {
@@ -173,12 +210,18 @@ class KernelClient(object):
         }
 
         try:
-            self.kernel_socket = websocket.create_connection(
+            self.kernel_socket = websockets.connect(
                 str(self.ws_api_endpoint),
                 timeout=self.timeout,
                 enable_multithread=True,
                 header=self.websocket_extra_headers,
             )
+            # self.kernel_socket = websocket.create_connection(
+            #     str(self.ws_api_endpoint),
+            #     timeout=self.timeout,
+            #     enable_multithread=True,
+            #     header=self.websocket_extra_headers,
+            # )
             self.log.debug(f'Kernel {self.kernel_id} connected')
 
         except websocket.WebSocketBadStatusException as e:
@@ -211,6 +254,72 @@ class KernelClient(object):
             if self.response_reader.is_alive():
                 self.log.warning("Response reader thread is not terminated, continuing...")
             self.response_reader = None
+
+    def execute_sync(self, code, timeout=REQUEST_TIMEOUT) -> Tuple[Iterable[str], dt.timedelta]:
+        """
+        Executes the code provided and returns the result of that execution.
+        """
+        if not self.kernel_socket:
+            self._create_ws_connection()
+
+        start_dt = dt.datetime.now()
+        response = []
+        try:
+            msg_id = self._send_request(code)
+
+            post_idle = False
+            while True:
+                response_message = self._get_response(msg_id, timeout, post_idle)
+                if response_message:
+                    response_message_type = response_message['msg_type']
+
+                    if response_message_type == 'error' or \
+                            (response_message_type == 'execute_reply' and
+                             response_message['content']['status'] == 'error'):
+                        response.extend(
+                            [
+                                '{} : {}'.format(
+                                    response_message['content']['ename'],
+                                    response_message['content']['evalue'],
+                                ),
+                                response_message['content']['traceback'],
+                            ]
+                        )
+                        # response.append('{}:{}:{}'.format(response_message['content']['ename'],
+                        #                                   response_message['content']['evalue'],
+                        #                                   response_message['content']['traceback']))
+                    elif response_message_type == 'stream':
+                        response.append(KernelClient._convert_raw_response(response_message['content']['text']))
+
+                    elif response_message_type == 'execute_result' or response_message_type == 'display_data':
+                        if 'text/plain' in response_message['content']['data']:
+                            response.append(
+                                KernelClient._convert_raw_response(response_message['content']['data']['text/plain']))
+                        elif 'text/html' in response_message['content']['data']:
+                            response.append(
+                                KernelClient._convert_raw_response(response_message['content']['data']['text/html']))
+                    elif response_message_type == 'status':
+                        if response_message['content']['execution_state'] == 'idle':
+                            post_idle = True  # indicate we're at the logical end and timeout poll for next message
+                            continue
+                    else:
+                        self.log.debug("Unhandled response for msg_id: {} of msg_type: {}".
+                                       format(msg_id, response_message_type))
+
+                if response_message is None:  # We timed out.  If post idle, its ok, else make mention of it
+                    if not post_idle:
+                        self.log.warning("Unexpected timeout occurred for msg_id: {} - no 'idle' status received!".
+                                         format(msg_id))
+                    break
+
+        except BaseException as b:
+            self.log.debug(b)
+
+        
+        end_dt = dt.datetime.now()
+        elapsed_dt = end_dt - start_dt
+        self.log.debug(f"ELAPSED TIME: {elapsed_dt}")
+        return response, elapsed_dt
 
     def execute(self, code, timeout=REQUEST_TIMEOUT) -> Tuple[Iterable[str], dt.timedelta]:
         """
@@ -277,7 +386,6 @@ class KernelClient(object):
         elapsed_dt = end_dt - start_dt
         self.log.debug(f"ELAPSED TIME: {elapsed_dt}")
         return response, elapsed_dt
-
 
     def interrupt(self):
         resp = self.http_client.post(
