@@ -1,4 +1,4 @@
-from typing import Dict, Union, Optional, List, Tuple, Iterable
+from typing import Dict, Union, Optional, List, Tuple, Iterable, Literal
 
 import datetime as dt
 from autologging import logged
@@ -69,11 +69,12 @@ class KernelClient(object):
             http_api_endpoint: Union[str, URL],
             ws_api_endpoint: Union[str, URL],
             kernel_id: str,
-            session_id: str,
+            session_id: Optional[str] = None,
+            type: Literal["normal", "gw"] = "normal",
             timeout=REQUEST_TIMEOUT,
             logger=None,
-            cookies: Union[httpx.Cookies, Dict] = None,
-            headers: Union[httpx.Headers, Dict] = None,
+            cookies: Union[httpx.Cookies, Dict] = {},
+            headers: Union[httpx.Headers, Dict] = {},
             params: str = None,
             # session_info: Dict = None
             ):
@@ -82,7 +83,10 @@ class KernelClient(object):
         self.http_url = http_api_endpoint
         self.ws_url = ws_api_endpoint
         self.kernel_id = kernel_id
-        self.session_id = session_id
+        self.server_type = type
+        self.session_id = None
+        if self.server_type == "normal":
+            self.session_id = session_id
         self.cookies = httpx.Cookies(cookies)
         self.headers = httpx.Headers(headers)
         self.params = params
@@ -94,7 +98,10 @@ class KernelClient(object):
         self.http_url_kernelspecs = build_url(self.http_url, URLPATH_KERNELSPECS)
         self.http_url_kernels = build_url(self.http_url, URLPATH_KERNELS)
         self.http_url_sessions = build_url(self.http_url, URLPATH_SESSIONS)
-        self.ws_url_sessions = build_url(self.ws_url, URLPATH_SESSIONS)
+        if self.server_type == "normal":
+            self.ws_url_sessions = build_url(self.ws_url, URLPATH_SESSIONS)
+        else:
+            self.ws_url_sessions = self.http_url_kernels
         self.http_url_contents = build_url(self.http_url, URLPATH_CONTENTS)
 
         self.http_api_endpoint = build_url(
@@ -169,7 +176,7 @@ class KernelClient(object):
 
     def _create_ws_connection(self):
         self.websocket_extra_headers = {
-            "X-XSRFToken": self.cookies["_xsrf"],
+            "X-XSRFToken": self.cookies.get("_xsrf", None),
             "Cookie": self._cookie_header_str,
         }
 
@@ -496,11 +503,14 @@ class GatewayClient(object):
     DEFAULT_GATEWAY_HOST = BASE_GATEWAY_URL = os.getenv('GATEWAY_HOST', 'http://localhost:8888')
     KERNEL_LAUNCH_TIMEOUT = os.getenv('KERNEL_LAUNCH_TIMEOUT', '60')
     DEFAULT_KERNEL_NAME = os.getenv("DEFAULT_KERNEL_NAME", "python3")
+    K8S_KERNEL_NAMESPACE = os.getenv("KERNEL_NAMESPACE", "default")
+    K8S_SERVICE_ACCOUNT_NAME = "default"
+
     
     # BASE_GATEWAY_HTTP_URL = f"http://{BASE_GATEWAY_URL}"
     # BASE_GATEWAY_WS_URL = f"ws://{BASE_GATEWAY_URL}"
 
-    def __init__(self, host=DEFAULT_GATEWAY_HOST, password=None):
+    def __init__(self, host=DEFAULT_GATEWAY_HOST, type: Literal["normal", "gw"] = "normal", password: str = None):
         
         self._set_urls(host=host)
 
@@ -508,9 +518,25 @@ class GatewayClient(object):
 
         self.log.setLevel(log_level)
         self.http_client = httpx.Client()
-        self.password = password
 
-        self._get_login()
+        self.request_cookies = {}
+        self.request_headers = {}
+        self.auth_body = {}
+        self.xsrf_cookie = ""
+
+        self.server_type: Literal["normal", "gw"] = type
+        if self.server_type == "normal":
+            if password is not None:
+                self.password = password
+                self._get_login()
+                # raise NotImplementedError("password must be given.")
+        elif self.server_type == "gw":
+            self.DEFAULT_KERNEL_NAME = "python_kubernetes"
+
+        else:
+            self.log.warn(f"client type is [{type}], not using the password...")
+            self.password = None
+
 
     def _set_urls(self, host=DEFAULT_GATEWAY_HOST) -> None:
         self.http_url: URL = URL(host)
@@ -653,7 +679,13 @@ class GatewayClient(object):
             headers=self.request_headers,
             data=json_encode({
                 "name": kernelspec_name,
-                "path": "",
+                "path": "",  # local notebook or lab, hub
+                "env": {
+                    "KERNEL_USERNAME": self.DEFAULT_USERNAME,
+                    "KERNEL_LAUNCH_TIMEOUT": self.KERNEL_LAUNCH_TIMEOUT,
+                    "KERNEL_NAMESPACE": self.K8S_KERNEL_NAMESPACE,
+                    "KERNEL_SERVICE_ACCOUNT_NAME": self.K8S_SERVICE_ACCOUNT_NAME,
+                }
             }),
         )
         if resp.status_code == 201:
@@ -680,10 +712,12 @@ class GatewayClient(object):
 
     def get_client(
             self,
-            kernelspec_name: str = "python3",
+            kernelspec_name: Optional[str] = None,
             ws_timeout: int = REQUEST_TIMEOUT,
             ) -> KernelClient:
 
+        if kernelspec_name is None:
+            kernelspec_name = self.DEFAULT_KERNEL_NAME
         self.kernelspecs = self.get_kernelspecs()
         self.DEFAULT_KERNEL_NAME = self.kernelspecs["default"]
 
@@ -710,43 +744,46 @@ class GatewayClient(object):
         self.log.debug(f"kernel_info: {kernel_info}")
         kernel_id: str = kernel_info["id"]
 
-        available_sessions: List[Dict] = self.get_sessions(
-            kernelspec_name=kernelspec_name,
-        )
-        self.log.debug(f"available_sessions: {available_sessions}")
-        if available_sessions:
-            available_session = available_sessions[0]
-            session_id = available_session.get("id")
-        else:
-
-            data_json = json_encode({
-                "kernel": kernel_info,
-                "name": f"session-{kernelspec_name}-{kernel_id}",
-                "type": "file",
-                "path": "",
-                "_xsrf": self.xsrf_cookie,
-            })
-            request_headers = self.request_headers.copy()
-            request_headers["content-length"] = str(len(data_json))
-            created_or_existing_session = self.http_client.post(
-                self.http_url_sessions,
-                cookies=self.request_cookies,
-                headers=request_headers,
-                data=data_json,
+        session_id = None
+        if self.server_type == "normal":
+            available_sessions: List[Dict] = self.get_sessions(
+                kernelspec_name=kernelspec_name,
             )
-            if created_or_existing_session.status_code == 201:
-                available_session = created_or_existing_session.json()
-                session_id = available_session.get("id")  # kernel_id in enterprise-gateway
-                kernel_id = available_session.get("kernel").get("id")
-                self.log.debug(f'Started kernel with session id {session_id}')
+            self.log.debug(f"available_sessions: {available_sessions}")
+            if available_sessions:
+                available_session = available_sessions[0]
+                session_id = available_session.get("id")
             else:
-                raise RuntimeError(
-                    'Error starting kernel : {} response code \n {}'.format(
-                        created_or_existing_session.status_code,
-                        created_or_existing_session.content
-                    )
+
+                data_json = json_encode({
+                    "kernel": kernel_info,
+                    "name": f"session-{kernelspec_name}-{kernel_id}",
+                    "type": "file",
+                    "path": "",
+                    "_xsrf": self.xsrf_cookie,
+                })
+                request_headers = self.request_headers.copy()
+                request_headers["content-length"] = str(len(data_json))
+
+                created_or_existing_session = self.http_client.post(
+                    self.http_url_sessions,
+                    cookies=self.request_cookies,
+                    headers=request_headers,
+                    data=data_json,
                 )
-            self.log.debug(f"existing_session: {available_session}")
+                if created_or_existing_session.status_code == 201:
+                    available_session = created_or_existing_session.json()
+                    session_id = available_session.get("id")  # kernel_id in enterprise-gateway
+                    kernel_id = available_session.get("kernel").get("id")
+                    self.log.debug(f'Started kernel with session id {session_id}')
+                else:
+                    raise RuntimeError(
+                        'Error starting kernel : {} response code \n {}'.format(
+                            created_or_existing_session.status_code,
+                            created_or_existing_session.content
+                        )
+                    )
+                self.log.debug(f"existing_session: {available_session}")
 
 
         return KernelClient(
@@ -754,6 +791,7 @@ class GatewayClient(object):
             self.ws_url,
             kernel_id,
             session_id,
+            type=self.server_type,
             timeout=ws_timeout,
             logger=self.log,
             cookies=self.request_cookies,
