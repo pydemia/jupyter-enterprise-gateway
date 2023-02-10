@@ -6,3 +6,4 @@ httpx
 websockets
 zmq
 autologging
+pytest-asyncio

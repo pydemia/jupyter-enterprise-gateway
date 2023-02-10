@@ -1,4 +1,5 @@
-from ..python.jupyter_kernel_blocking_client import GatewayClient, KernelClient, decode_cellmsg
+from ..python.jupyter_kernel_blocking_client import GatewayClient, KernelClient
+from ..python.utils import decode_cellmsg
 import logging
 import datetime as dt
 

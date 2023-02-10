@@ -24,6 +24,11 @@ kubectl create namespace enterprise-gateway
 helm  upgrade --install  enterprise-gateway \
   "https://github.com/jupyter-server/enterprise_gateway/releases/download/v${EG_VERSION}/jupyter_enterprise_gateway_helm-${EG_VERSION}.tar.gz" \
    --namespace enterprise-gateway
+
+helm  upgrade --install  enterprise-gateway \
+  ./enterprise-gateway \
+   --namespace enterprise-gateway \
+   --values=custom-values.yaml
 ```
 
 Then, Port-Forward `-n enterprise-gateway service/enterprise-gateway` (18888:8888)

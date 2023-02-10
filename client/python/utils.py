@@ -1,11 +1,14 @@
-from typing import Dict
-from httpx import URL
+from typing import Dict, Union, List
+import ast
 from pathlib import Path
+
+from httpx import URL
 
 
 __all__ = [
     "joinpaths",
     "build_url",
+    "decode_cellmsg",
 ]
 
 
@@ -27,3 +30,12 @@ def build_url(url: URL, *paths: str, **kwargs) -> URL:
         path=joinpaths(url.path, *paths),
         **kwargs,
     )
+
+
+def decode_cellmsg(res: Union[str, List[str]]):
+    if isinstance(res, str):
+        res = [res]
+    msg = ["\n".join(m) if isinstance(m, list) else m for m in res]
+    # msg = [ast.literal_eval(f"b'''{m}'''").decode() for m in res]
+    return '\n'.join(msg)
+    # return msg

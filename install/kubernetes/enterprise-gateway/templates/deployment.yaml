@@ -73,6 +73,15 @@ spec:
           value: {{ toJson .Values.kernel.allowedKernels | squote }}
         - name: EG_DEFAULT_KERNEL_NAME
           value: {{ .Values.kernel.defaultKernelName }}
+        - name: EG_CLIENT_ENVS
+          value: '*'
+            # - KERNEL_NAMESPACE
+            # - KERNEL_SERVICE_ACCOUNT_NAME
+        - name: EG_ENV_WHITELIST
+          value: '*'
+            # - KERNEL_NAMESPACE
+            # - KERNEL_SERVICE_ACCOUNT_NAME
+          
         # Optional authorization token passed in all requests
         {{- if .Values.authToken }}
         - name: EG_AUTH_TOKEN

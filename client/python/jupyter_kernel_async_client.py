@@ -36,17 +36,7 @@ from websockets import connect
 from websockets.utils import generate_key
 
 from jupyter_client import BlockingKernelClient, AsyncKernelClient
-
-import ast
-
-def decode_cellmsg(res: Union[str, List[str]]):
-    if isinstance(res, str):
-        res = [res]
-    msg = ["\n".join(m) if isinstance(m, list) else m for m in res]
-    # msg = [ast.literal_eval(f"b'''{m}'''").decode() for m in res]
-    return '\n'.join(msg)
-    # return msg
-
+from .utils import decode_cellmsg
 
 
 URLPATH_LOGIN = "/login"
@@ -201,7 +191,7 @@ class KernelClient(object):
             extra_headers=self.websocket_extra_headers,
         ) as ws:
             await ws.send(code)
-            await ws.recv()
+            return await ws.recv()
 
     def _create_ws_connection(self):
         self.websocket_extra_headers = {
