@@ -1,5 +1,6 @@
 from typing import Dict, Union, Optional, List, Tuple, Iterable, Literal
 
+import asyncio
 import datetime as dt
 from autologging import logged
 import os
@@ -287,7 +288,7 @@ class KernelClient(object):
         return response, elapsed_dt
 
 
-    async def execute_async(self, code, timeout=REQUEST_TIMEOUT) -> Tuple[Iterable[str], dt.timedelta]:
+    async def execute_async(self, code, timeout=REQUEST_TIMEOUT) -> Iterable[str]:  # -> Tuple[Iterable[str], dt.timedelta]:
         """
         Executes the code provided and returns the result of that execution.
         """
@@ -297,27 +298,36 @@ class KernelClient(object):
         ws = self.kernel_socket
         start_dt = dt.datetime.now()
 
-        def get_elapsed_dt(start_dt) -> dt.timedelta:
-            return dt.datetime.now() - start_dt
+        def format_msg(msg: List[Optional[str]], start_dt: dt.timedelta) -> Tuple[List[str], dt.timedelta]:
+            return msg, dt.datetime.now() - start_dt
+        # async def format_msg(msg: List[Optional[str]], start_dt: dt.timedelta) -> Tuple[List[str], dt.timedelta]:
+        #     return msg, dt.datetime.now() - start_dt
 
         # msg_id = self._send_request(code)
         # self.response_queues[msg_id] = queue.Queue()
         # # msg_id = await ws.send(code)
         # msg_resp, elapsed = await ws.recv(), (dt.datetime.now() - start_dt)
         # print(msg_resp, elapsed)
-        response = []
+        msg_resp = []
+
         try:
             msg_id = self._send_request(code)
+            msg_resp.append(msg_id)
+            # await asyncio.gather(format_msg(msg_resp, start_dt))
+            # await msg_list, dt.datetime.now() - start_dt
+            # yield asyncio.gather(format_msg(msg_resp, start_dt))
+            yield format_msg(msg_resp, start_dt)
 
             post_idle = False
             while True:
                 response_message = self._get_response(msg_id, timeout, post_idle)
+                # response_message = await self._get_response_async(msg_id, timeout, post_idle)
                 if response_message:
                     response_message_type = response_message['msg_type']
 
                     if response_message_type == 'error' or \
                             (response_message_type == 'execute_reply' and
-                             response_message['content']['status'] == 'error'):
+                                response_message['content']['status'] == 'error'):
                         msg_list = [
                             '{} : {}'.format(
                                 response_message['content']['ename'],
@@ -325,30 +335,42 @@ class KernelClient(object):
                             ),
                             response_message['content']['traceback'],
                         ]
-                        # response.append(msg_str)
-                        await msg_list, get_elapsed_dt(start_dt)
+                        msg_resp.extend(msg_list)
+                        # await asyncio.gather(format_msg(msg_resp, start_dt))
+                        # yield asyncio.gather(format_msg(msg_resp, start_dt))
+                        yield format_msg(msg_resp, start_dt)
+                        # await msg_list, dt.datetime.now() - start_dt
 
                     elif response_message_type == 'stream':
                         msg_list = [
                             KernelClient._convert_raw_response(response_message['content']['text'])
                         ]
-                        # response.extend(msg_list)
-                        await msg_list, get_elapsed_dt(start_dt)
+                        msg_resp.extend(msg_list)
+                        # await asyncio.gather(format_msg(msg_resp, start_dt))
+                        # yield asyncio.gather(format_msg(msg_resp, start_dt))
+                        yield format_msg(msg_resp, start_dt)
+                        # await msg_list, dt.datetime.now() - start_dt
 
                     elif response_message_type == 'execute_result' or response_message_type == 'display_data':
                         if 'text/plain' in response_message['content']['data']:
                             msg_list = [
                                 KernelClient._convert_raw_response(response_message['content']['data']['text/plain'])
                             ]
-                            # response.extend(msg_list)
-                            await msg_list, get_elapsed_dt(start_dt)
+                            msg_resp.extend(msg_list)
+                            # await asyncio.gather(format_msg(msg_resp, start_dt))
+                            # yield asyncio.gather(format_msg(msg_resp, start_dt))
+                            yield format_msg(msg_resp, start_dt)
+                            # await msg_list, dt.datetime.now() - start_dt
 
                         elif 'text/html' in response_message['content']['data']:
                             msg_list = [
                                 KernelClient._convert_raw_response(response_message['content']['data']['text/html'])
                             ]
-                            response.extend(msg_list)
-                            await msg_list, get_elapsed_dt(start_dt)
+                            msg_resp.extend(msg_list)
+                            # await asyncio.gather(format_msg(msg_resp, start_dt))
+                            # yield asyncio.gather(format_msg(msg_resp, start_dt))
+                            yield format_msg(msg_resp, start_dt)
+                            # await msg_list, dt.datetime.now() - start_dt
 
                     elif response_message_type == 'status':
                         if response_message['content']['execution_state'] == 'idle':
@@ -356,16 +378,26 @@ class KernelClient(object):
                             continue
                     else:
                         self.log.debug("Unhandled response for msg_id: {} of msg_type: {}".
-                                       format(msg_id, response_message_type))
+                                        format(msg_id, response_message_type))
 
                 if response_message is None:  # We timed out.  If post idle, its ok, else make mention of it
                     if not post_idle:
                         self.log.warning("Unexpected timeout occurred for msg_id: {} - no 'idle' status received!".
-                                         format(msg_id))
+                                            format(msg_id))
+                    # return await asyncio.gather(format_msg(msg_resp, start_dt))
+                    # yield asyncio.gather(format_msg(msg_resp, start_dt))
+                    yield format_msg(msg_resp, start_dt)
                     break
+                    # return await msg_list, dt.datetime.now() - start_dt
+                    # break
 
         except BaseException as b:
             self.log.debug(b)
+            # return await asyncio.gather(format_msg(msg_resp, start_dt))
+            # yield await asyncio.gather(format_msg(msg_resp, start_dt))
+            yield format_msg(msg_resp, start_dt)
+            raise StopAsyncIteration(b)
+            # return await msg_list, dt.datetime.now() - start_dt
 
         
         # end_dt = dt.datetime.now()
@@ -568,6 +600,28 @@ class KernelClient(object):
         return msg_id
 
     def _get_response(self, msg_id, timeout, post_idle):
+        """
+        Pulls the next response message from the queue corresponding to msg_id.  If post_idle is true,
+        the timeout parameter is set to a very short value since a majority of time, there won't be a
+        message in the queue.  However, in cases where a race condition occurs between the idle status
+        and the execute_result payload - where the two are out of order, then this will pickup the result.
+        """
+
+        if post_idle and timeout > KernelClient.POST_IDLE_TIMEOUT:
+            timeout = KernelClient.POST_IDLE_TIMEOUT  # overwrite timeout to small value following idle messages.
+
+        msg_queue = self.response_queues.get(msg_id)
+        try:
+            self.log.debug("Getting response for msg_id: {} with timeout: {}".format(msg_id, timeout))
+            response = msg_queue.get(timeout=timeout)
+            self.log.debug("Got response for msg_id: {}, msg_type: {}".
+                           format(msg_id, response['msg_type'] if response else 'null'))
+        except queue.Empty:
+            response = None
+
+        return response
+
+    async def _get_response_async(self, msg_id, timeout, post_idle):
         """
         Pulls the next response message from the queue corresponding to msg_id.  If post_idle is true,
         the timeout parameter is set to a very short value since a majority of time, there won't be a
@@ -911,9 +965,9 @@ class GatewayClient(object):
 
         if kernelspec_name in self.kernelspecs["kernelspecs"]:
             self.DEFAULT_KERNEL_NAME = kernelspec_name
-            self.log.warning("Use kernelspec name '{default_kernelspec_name}' as default...")
+            self.log.warning(f"Use kernelspec name '{kernelspec_name}' as default...")
         else:
-            self.log.warning("The given kernelspec name '{kernelspec_name}' does not exist. use system default '{self.DEFAULT_KERNEL_NAME}' instead...")
+            self.log.warning(f"The given kernelspec name '{kernelspec_name}' does not exist. use system default '{self.DEFAULT_KERNEL_NAME}' instead...")
 
         # kernel_info = {
         #     'name': self.DEFAULT_KERNEL_NAME,

@@ -145,38 +145,10 @@ for _ in range(5):
     # msg_resp, elapsed_time = await asyncio.gather(kernel_client.execute_async(code5))
     # print(msg_resp, f"MSG3: elapsed: {elapsed_time}", sep="\n")
 
-    finished = False
-    while not finished:
-        try:
-            msg_resp, elapsed_time = await kernel_client.execute_async(code5)
-            print(msg_resp, f"MSG3: elapsed: {elapsed_time}", sep="\n")
-        except websocket.WebSocketConnectionClosedException:
-            print(msg_resp, f"MSG3: elapsed: {elapsed_time}", sep="\n")
-            finished = True
-        
-        # try:
-        #     msg_resp, elapsed_time = await kernel_client.execute_async(code5)
-        #     print(msg_resp, f"MSG3: elapsed: {elapsed_time}", sep="\n")
+    # Type 1: async_generator
+    async for msg_resp, elapsed_time in kernel_client.execute_async(code5):
+        print(msg_resp, f"MSG: elapsed: {elapsed_time}", sep="\n")
 
-    # msg_resp, elapsed_time = await kernel_client.execute_async(code5)
-    # print(msg_resp, f"MSG3: elapsed: {elapsed_time}", sep="\n")
-
-    # try:
-    #     msg_resp, elapsed_time = await asyncio.wait_for(kernel_client.execute_async(code5), timeout=100)
-    # except asyncio.TimeoutError:
-    #     print("Timeout")
-    
-    # msg_resp, elapsed_time = loop.run_until_complete(
-    #     asyncio.gather(
-    #         kernel_client.execute_async(code5)
-    #     )
-    # )
-    # async for msg_resp, elapsed_time in kernel_client.execute_async(code5):
-    #     try:
-    #         msg5 = decode_cellmsg(msg_resp)
-    #         print(msg5, f"MSG0: elapsed: {elapsed_time}", sep="\n")
-            
-    
     # kernel_client.restart()
     kernel_client.interrupt()
     print(kernel_client.get_state())
@@ -193,3 +165,4 @@ for _ in range(5):
     #     return kernel_client.execute(code)
 
     assert True
+
