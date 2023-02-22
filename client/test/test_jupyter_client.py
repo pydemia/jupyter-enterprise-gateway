@@ -8,11 +8,12 @@ logging.basicConfig(level="INFO")
 
 log = logging.getLogger("TEST Jupyter Client")
 
-DEFAULT_USERNAME = "jovyan"
+DEFAULT_USERNAME = "jupyter" # "jovyan"
 REQUEST_TIMEOUT = TIMEOUT = 120
 DEFAULT_KERNELSPEC_NAME = "python_kubernetes"  # "python3"
-
 BASE_GATEWAY_URL = "http://localhost:18888"
+KERNEL_NAMESPACE = "default"
+KERNEL_ID = "78c7dc31-03cb-56c3-b406-1d8cc63bda0d"
 PASSWORD = "zxc"
 
 def test_blocking_client():
@@ -22,6 +23,8 @@ def test_blocking_client():
         host=BASE_GATEWAY_URL,
         type="gw",
         password=PASSWORD,
+        default_namespace="default",
+        default_service_account_name="default",
     )
     print(f"GateWayClient: elapsed: {dt.datetime.now() - start_dt}", sep="\n")
     gw_client.DEFAULT_USERNAME = DEFAULT_USERNAME
@@ -32,7 +35,10 @@ def test_blocking_client():
     #     username=DEFAULT_USERNAME,
     #     timeout=REQUEST_TIMEOUT,
     # )
-    kernel_client: KernelClient = gw_client.get_client()
+    kernel_client: KernelClient = gw_client.get_client(
+        namespace=KERNEL_NAMESPACE,
+        kernel_id=KERNEL_ID,
+    )
     print(f"KernelClient: elapsed: {dt.datetime.now() - start_dt}", sep="\n")
 
     code0 = """
@@ -108,6 +114,10 @@ async def test_async_client():
         host=BASE_GATEWAY_URL,
         type="gw",
         password=PASSWORD,
+        # default_namespace="default",
+        # default_service_account_name="default",
+        default_namespace=KERNEL_NAMESPACE,
+        default_service_account_name="default",
     )
     print(f"GateWayClient: elapsed: {dt.datetime.now() - start_dt}", sep="\n")
     gw_client.DEFAULT_USERNAME = DEFAULT_USERNAME
@@ -118,7 +128,10 @@ async def test_async_client():
     #     username=DEFAULT_USERNAME,
     #     timeout=REQUEST_TIMEOUT,
     # )
-    kernel_client: KernelClient = gw_client.get_client()
+    kernel_client: KernelClient = gw_client.get_client(
+        namespace=KERNEL_NAMESPACE,
+        kernel_id=KERNEL_ID,
+    )
     print(f"KernelClient: elapsed: {dt.datetime.now() - start_dt}", sep="\n")
 
     code5 = """
@@ -152,10 +165,10 @@ for _ in range(5):
     # kernel_client.restart()
     kernel_client.interrupt()
     print(kernel_client.get_state())
-    kernel_client.shutdown()
+    # kernel_client.shutdown()
     try:
         kernel_client.restart()
-        kernel_client.shutdown()
+        # kernel_client.shutdown()
     except AttributeError:
         pass
 

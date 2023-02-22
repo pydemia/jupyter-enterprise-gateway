@@ -40,6 +40,16 @@ from jupyter_client import BlockingKernelClient, AsyncKernelClient
 
 import ast
 
+
+__all__ = [
+    "decode_cellmsg",
+    "encode_kernel_id",
+    "decode_kernel_id",
+    "KernelClient",
+    "GatewayClient",
+]
+
+
 def decode_cellmsg(res: Union[str, List[str]]):
     if isinstance(res, str):
         res = [res]
@@ -48,6 +58,23 @@ def decode_cellmsg(res: Union[str, List[str]]):
     return '\n'.join(msg)
     # return msg
 
+
+def encode_kernel_id(project_id: int, workflow_id: int) -> str:
+    uu = uuid.uuid5(uuid.NAMESPACE_DNS, name="seed")
+    _, *fields, _ = uu.fields
+    kernel_id = uuid.UUID(fields=(project_id, *fields, int(workflow_id)), version=4)
+    return str(kernel_id)
+
+
+def decode_kernel_id(kernel_id: Union[uuid.UUID, str]) -> Tuple[int, int]:
+    if isinstance(kernel_id, str):
+        kernel_id = uuid.UUID(kernel_id, version=4)
+    else:
+        if kernel_id.version != 4:
+            raise ValueError("'kernel_id' should be 'uuid4' style.")
+
+    project_id, *_, workflow_id = kernel_id.fields
+    return project_id, workflow_id
 
 
 URLPATH_LOGIN = "/login"
@@ -741,19 +768,32 @@ class GatewayClient(object):
     integration tests and can be leveraged for micro service type of
     connections.
     """
-    DEFAULT_USERNAME = os.getenv('KERNEL_USERNAME', 'jovyan')
+    DEFAULT_USERNAME = os.getenv('KERNEL_USERNAME', 'jupyter')
     DEFAULT_GATEWAY_HOST = BASE_GATEWAY_URL = os.getenv('GATEWAY_HOST', 'http://localhost:8888')
     KERNEL_LAUNCH_TIMEOUT = os.getenv('KERNEL_LAUNCH_TIMEOUT', '60')
     DEFAULT_KERNEL_NAME = os.getenv("DEFAULT_KERNEL_NAME", "python3")
-    K8S_KERNEL_NAMESPACE = os.getenv("KERNEL_NAMESPACE", "default")
-    K8S_SERVICE_ACCOUNT_NAME = "default"
+    DEFAULT_K8S_KERNEL_NAMESPACE = os.getenv("KERNEL_NAMESPACE", "default")
+    DEFAULT_K8S_SERVICE_ACCOUNT_NAME = "default"
 
     
     # BASE_GATEWAY_HTTP_URL = f"http://{BASE_GATEWAY_URL}"
     # BASE_GATEWAY_WS_URL = f"ws://{BASE_GATEWAY_URL}"
 
-    def __init__(self, host=DEFAULT_GATEWAY_HOST, type: Literal["normal", "gw"] = "normal", password: str = None):
-        
+    def __init__(
+            self,
+            host=DEFAULT_GATEWAY_HOST,
+            type: Literal["normal", "gw"] = "normal",
+            password: str = None,
+            default_namespace: Optional[str] = None,
+            default_service_account_name: Optional[str] = None,
+            ):
+
+        if default_namespace is not None:
+            self.DEFAULT_K8S_KERNEL_NAMESPACE = default_namespace
+
+        if default_service_account_name is not None:
+            self.DEFAULT_K8S_SERVICE_ACCOUNT_NAME = default_service_account_name
+
         self._set_urls(host=host)
 
         self.log = logging.getLogger('GatewayClient')
@@ -885,7 +925,7 @@ class GatewayClient(object):
         else:
             raise httpx.RequestError
     
-    def get_kernel(self, kernel_id: str) -> Dict:
+    def get_kernel(self, kernel_id: str) -> Optional[Dict]:
         resp = self.http_client.get(
             build_url(self.http_url_kernels, kernel_id),
             cookies=self.request_cookies,
@@ -893,6 +933,8 @@ class GatewayClient(object):
         )
         if resp.status_code == 200:
             return resp.json()
+        elif resp.status_code == 404:
+            return None
         else:
             raise httpx.RequestError
     
@@ -912,22 +954,56 @@ class GatewayClient(object):
                 )
             )
     
-    def start_new_kernel(self, kernelspec_name: str = None) -> Dict:
+    def start_new_kernel(
+            self,
+            kernelspec_name: Optional[str] = None,
+            namespace: Optional[str] = None,
+            service_account_name: Optional[str] = None,
+            kernel_id: Optional[str] = None,
+            ) -> Dict:
+
+        if namespace is None:
+            namespace = self.DEFAULT_K8S_KERNEL_NAMESPACE
+        if service_account_name is None:
+            service_account_name = self.DEFAULT_K8S_SERVICE_ACCOUNT_NAME
+
         if not kernelspec_name:
             kernelspec_name = self.DEFAULT_KERNEL_NAME
+        # SYSTEM_OPT_PREFIX = os.getenv("SYSTEM_OPT_PREFIX", "SYSTEM__")
+        #     SYSTEM_OPT_KEYS = {
+        #         "kernel_cpus",
+        #         "kernel_memory",
+        #         "kernel_gpus",
+        #         "kernel_cpus_limit",
+        #         "kernel_memory_limit",
+        #         "kernel_gpus_limit",
+        #         "kernel_volume_mounts",
+        #         "kernel_volumes",
+        #         "kernel_working_dir",
+        #     }
+        env_dict = {
+            "KERNEL_USERNAME": self.DEFAULT_USERNAME,
+            "KERNEL_LAUNCH_TIMEOUT": self.KERNEL_LAUNCH_TIMEOUT,
+            # "KERNEL_NAMESPACE": namespace,
+            # "KERNEL_SERVICE_ACCOUNT_NAME": service_account_name,
+        }
+        if kernel_id is not None:
+            env_dict["KERNEL_ID"] = kernel_id
+
         resp = self.http_client.post(
             self.http_url_kernels,
             cookies=self.request_cookies,
             headers=self.request_headers,
+            params={
+                "namespace": namespace,
+                "sa_name": service_account_name,
+                "kernel_cpus_limit": "1.0",
+                "kernel_memory_limit": "3Gi",
+            },
             data=json_encode({
                 "name": kernelspec_name,
                 "path": "",  # local notebook or lab, hub
-                "env": {
-                    "KERNEL_USERNAME": self.DEFAULT_USERNAME,
-                    "KERNEL_LAUNCH_TIMEOUT": self.KERNEL_LAUNCH_TIMEOUT,
-                    "KERNEL_NAMESPACE": self.K8S_KERNEL_NAMESPACE,
-                    "KERNEL_SERVICE_ACCOUNT_NAME": self.K8S_SERVICE_ACCOUNT_NAME,
-                }
+                "env": env_dict,
             }),
         )
         if resp.status_code == 201:
@@ -954,9 +1030,15 @@ class GatewayClient(object):
 
     def get_client(
             self,
+            namespace: Optional[str] = None,
+            service_account_name: Optional[str] = None,
             kernelspec_name: Optional[str] = None,
+            kernel_id: Optional[str] = None,
             ws_timeout: int = REQUEST_TIMEOUT,
             ) -> KernelClient:
+
+        if namespace is None:
+            namespace = self.DEFAULT_K8S_KERNEL_NAMESPACE
 
         if kernelspec_name is None:
             kernelspec_name = self.DEFAULT_KERNEL_NAME
@@ -977,11 +1059,25 @@ class GatewayClient(object):
         #     # }
         # }
 
-        kernels_opened: List[Dict] = self.get_kernels()
-        try:
-            kernel_info: Dict = kernels_opened[0]
-        except IndexError:
-            kernel_info: Dict = self.start_new_kernel(kernelspec_name=kernelspec_name)
+        # kernels_opened: List[Dict] = self.get_kernels()
+        # try:
+        #     kernel_info: Dict = kernels_opened[0]
+        # except IndexError:
+        #     kernel_info: Dict = self.start_new_kernel(
+        #         kernelspec_name=kernelspec_name,
+        #         namespace=namespace,
+        #         service_account_name=service_account_name,
+        #         kernel_id=kernel_id,
+        #     )
+        
+        kernel_info: Optional[Dict] = self.get_kernel(kernel_id)
+        if kernel_info is None:
+            kernel_info: Dict = self.start_new_kernel(
+                kernelspec_name=kernelspec_name,
+                namespace=namespace,
+                service_account_name=service_account_name,
+                kernel_id=kernel_id,
+            )
 
         self.log.debug(f"kernel_info: {kernel_info}")
         kernel_id: str = kernel_info["id"]

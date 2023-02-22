@@ -35,4 +35,7 @@ Then, Port-Forward `-n enterprise-gateway service/enterprise-gateway` (18888:888
 
 ```bash
 ./launch_client.sh
+
+# kubectl delete clusterrole enterprise-gateway-controller kernel-controller kip-controller
+# kubectl delete clusterrolebinding enterprise-gateway-controller enterprise-gateway-kip
 ```
