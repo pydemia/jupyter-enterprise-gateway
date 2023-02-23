@@ -426,115 +426,6 @@ class KernelClient(object):
             raise StopAsyncIteration(b)
             # return await msg_list, dt.datetime.now() - start_dt
 
-        
-        # end_dt = dt.datetime.now()
-        # elapsed_dt = end_dt - start_dt
-        # self.log.debug(f"ELAPSED TIME: {elapsed_dt}")
-
-        # self.websocket_extra_headers = {
-        #     "X-XSRFToken": self.cookies.get("_xsrf", None),
-        #     "Cookie": self._cookie_header_str,
-        # }
-        # async with websockets.connect(
-        #     str(self.ws_api_endpoint),
-        #     timeout=self.timeout,
-        #     extra_headers=self.websocket_extra_headers,
-        # ) as ws:
-        #     start_dt = dt.datetime.now()
-        #     msg_id = ws.send(code)
-        #     # msg_id = await ws.send(code)
-        #     msg_resp, elapsed = await ws.recv(), (dt.datetime.now() - start_dt)
-        #     print(msg_resp, elapsed)
-
-        # ws = websockets.connect(
-        #     str(self.ws_api_endpoint),
-        #     timeout=self.timeout,
-        #     extra_headers=self.websocket_extra_headers,
-        # )
-        # start_dt = dt.datetime.now()
-        # msg_id = ws.send(code)
-        # # msg_id = await ws.send(code)
-        # msg_resp, elapsed = await ws.recv(), (dt.datetime.now() - start_dt)
-        # print(msg_resp, elapsed)
-
-            # try:
-            #     msg_id = await ws.send(code)
-            # except websockets.ConnectionClosed:
-            #     continue
-
-        # try:
-        #     self.kernel_socket = websocket.create_connection(
-        #         str(self.ws_api_endpoint),
-        #         timeout=self.timeout,
-        #         enable_multithread=True,
-        #         header=self.websocket_extra_headers,
-        #     )
-        #     self.log.debug(f'Kernel {self.kernel_id} connected')
-
-        # except websocket.WebSocketBadStatusException as e:
-        #     self.kernel_socket = None
-        #     self.log.debug(f'Kernel {self.kernel_id} cannot be connected')
-        #     raise e
-            
-        # start_dt = dt.datetime.now()
-        # response = []
-        # try:
-        #     msg_id = self._send_request(code)
-
-        #     post_idle = False
-        #     while True:
-        #         response_message = self._get_response(msg_id, timeout, post_idle)
-        #         if response_message:
-        #             response_message_type = response_message['msg_type']
-
-        #             if response_message_type == 'error' or \
-        #                     (response_message_type == 'execute_reply' and
-        #                      response_message['content']['status'] == 'error'):
-        #                 response.extend(
-        #                     [
-        #                         '{} : {}'.format(
-        #                             response_message['content']['ename'],
-        #                             response_message['content']['evalue'],
-        #                         ),
-        #                         response_message['content']['traceback'],
-        #                     ]
-        #                 )
-        #                 # response.append('{}:{}:{}'.format(response_message['content']['ename'],
-        #                 #                                   response_message['content']['evalue'],
-        #                 #                                   response_message['content']['traceback']))
-        #             elif response_message_type == 'stream':
-        #                 response.append(KernelClient._convert_raw_response(response_message['content']['text']))
-
-        #             elif response_message_type == 'execute_result' or response_message_type == 'display_data':
-        #                 if 'text/plain' in response_message['content']['data']:
-        #                     response.append(
-        #                         KernelClient._convert_raw_response(response_message['content']['data']['text/plain']))
-        #                 elif 'text/html' in response_message['content']['data']:
-        #                     response.append(
-        #                         KernelClient._convert_raw_response(response_message['content']['data']['text/html']))
-        #             elif response_message_type == 'status':
-        #                 if response_message['content']['execution_state'] == 'idle':
-        #                     post_idle = True  # indicate we're at the logical end and timeout poll for next message
-        #                     continue
-        #             else:
-        #                 self.log.debug("Unhandled response for msg_id: {} of msg_type: {}".
-        #                                format(msg_id, response_message_type))
-
-        #         if response_message is None:  # We timed out.  If post idle, its ok, else make mention of it
-        #             if not post_idle:
-        #                 self.log.warning("Unexpected timeout occurred for msg_id: {} - no 'idle' status received!".
-        #                                  format(msg_id))
-        #             break
-
-        # except BaseException as b:
-        #     self.log.debug(b)
-
-        
-        # end_dt = dt.datetime.now()
-        # elapsed_dt = end_dt - start_dt
-        # self.log.debug(f"ELAPSED TIME: {elapsed_dt}")
-        # return response, elapsed_dt
-
 
     def interrupt(self):
         resp = self.http_client.post(
@@ -770,14 +661,11 @@ class GatewayClient(object):
     """
     DEFAULT_USERNAME = os.getenv('KERNEL_USERNAME', 'jupyter')
     DEFAULT_GATEWAY_HOST = BASE_GATEWAY_URL = os.getenv('GATEWAY_HOST', 'http://localhost:8888')
-    KERNEL_LAUNCH_TIMEOUT = os.getenv('KERNEL_LAUNCH_TIMEOUT', '60')
+    KERNEL_LAUNCH_TIMEOUT = os.getenv('KERNEL_LAUNCH_TIMEOUT', '300')
     DEFAULT_KERNEL_NAME = os.getenv("DEFAULT_KERNEL_NAME", "python3")
     DEFAULT_K8S_KERNEL_NAMESPACE = os.getenv("KERNEL_NAMESPACE", "default")
     DEFAULT_K8S_SERVICE_ACCOUNT_NAME = "default"
 
-    
-    # BASE_GATEWAY_HTTP_URL = f"http://{BASE_GATEWAY_URL}"
-    # BASE_GATEWAY_WS_URL = f"ws://{BASE_GATEWAY_URL}"
 
     def __init__(
             self,
